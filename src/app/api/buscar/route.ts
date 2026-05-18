@@ -210,7 +210,8 @@ export async function GET(request: NextRequest) {
     const precioCedear = iolD?.ultimoPrecio ?? null;
 
     // Info del subyacente desde Yahoo
-    const detailsCedear = await getYahooDetails(base, '.BA');
+    // Para fundamentals del CEDEAR usamos el subyacente US (sin .BA)
+const detailsCedear = await getYahooDetails(base, '');
 
     if (precioCedear || detailsCedear) {
       return NextResponse.json({
