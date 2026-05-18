@@ -102,7 +102,7 @@ function SearchResultRV({ r }: { r: any }) {
         {(r.dividendo != null || r.rendDividendo != null) && (
           <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px' }}>
             <div className="label-xs" style={{ marginBottom: '10px' }}>💰 Dividendo</div>
-            {r.dividendo != null && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Anual</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.dividendo)}</span></div>}
+            {r.dividendo != null && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Anual</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>{fmtUSD(r.dividendo)}</span></div>}
             {r.rendDividendo != null && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Rendimiento</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--green)' }}>{fmtPct(r.rendDividendo)}</span></div>}
             {r.fechaExDividendo && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Ex-dividendo</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--text2)' }}>{r.fechaExDividendo}</span></div>}
           </div>
@@ -112,7 +112,7 @@ function SearchResultRV({ r }: { r: any }) {
             <div className="label-xs" style={{ marginBottom: '10px' }}>🎯 Analistas {r.numAnalistas ? `(${r.numAnalistas})` : ''}</div>
             {recom && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Consenso</span><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: recom.color }}>{recom.label}</span></div>}
             {r.precioObjetivo != null && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Precio objetivo</span>
                 <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>
                   {fmtUSD(r.precioObjetivo)}
@@ -122,6 +122,46 @@ function SearchResultRV({ r }: { r: any }) {
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── CEDEAR ────────────────────────────────────────────────
+
+function SearchResultCedear({ r }: { r: any }) {
+  const precio = r.precio || {};
+  const esUSD = precio.moneda === 'USD';
+  return (
+    <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: '22px', color: 'var(--text)' }}>{r.ticker}</span>
+            <Badge label="CEDEAR" color="var(--violet-light)" />
+            <Badge label={esUSD ? '💵 USD · Seg. D' : '🇦🇷 ARS'} color={esUSD ? 'var(--blue)' : 'var(--green)'} />
+            {r.fuente && <Badge label={r.fuente} color="var(--muted)" />}
+          </div>
+          {r.nombre && <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '2px' }}>{r.nombre}</div>}
+          {precio.fechaHora && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Último: {new Date(precio.fechaHora).toLocaleString('es-AR')}</div>}
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>
+            {esUSD ? fmtUSD(precio.valor) : fmtARS(precio.valor)}
+          </div>
+          {precio.variacion != null && (
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>
+              {fmtPct(precio.variacion)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+        <StatBox label="Apertura" value={esUSD ? fmtUSD(r.apertura ?? null) : fmtARS(r.apertura ?? null)} />
+        <StatBox label="Máximo" value={esUSD ? fmtUSD(r.maximo ?? null) : fmtARS(r.maximo ?? null)} />
+        <StatBox label="Mínimo" value={esUSD ? fmtUSD(r.minimo ?? null) : fmtARS(r.minimo ?? null)} />
+        <StatBox label="Cierre ant." value={esUSD ? fmtUSD(r.cierreAnterior ?? null) : fmtARS(r.cierreAnterior ?? null)} />
       </div>
     </div>
   );
@@ -139,12 +179,11 @@ function SearchResultRF({ r }: { r: any }) {
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
 
   const handleSimular = () => {
-    if (!r.analytics?.flujos) return;
+    if (!r.analytics?.flujos?.length) return;
     const vn = parseFloat(vnSim);
     if (isNaN(vn) || vn <= 0) return;
     const factor = vn / 100;
-    const precioValor = r.precio?.valor ?? 0;
-    const inversion = +(precioValor / 100 * vn).toFixed(2);
+    const inversion = +((r.precio?.valor ?? 0) / 100 * vn).toFixed(2);
     const flujos = r.analytics.flujos.map((f: any, i: number) => ({
       ...f, n: i + 1,
       interesT: +(f.interes * factor).toFixed(2),
@@ -173,13 +212,11 @@ function SearchResultRF({ r }: { r: any }) {
             {r.fuente && <Badge label={r.fuente} color="var(--muted)" />}
           </div>
           {spec.nombre && <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '2px' }}>{spec.nombre}</div>}
-          {spec.cuponDesc && <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Cupón: {spec.cuponTexto || spec.cuponDesc} {spec.laminaMinima ? `· Lámina mín. ${spec.laminaMinima}` : ''}</div>}
+          {spec.cuponDesc && <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Cupón: {spec.cuponTexto || spec.cuponDesc}{spec.laminaMinima ? ` · Lámina mín. ${spec.laminaMinima}` : ''}</div>}
           {precio.fechaHora && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginTop: '2px' }}>Último: {new Date(precio.fechaHora).toLocaleString('es-AR')} · {precio.fuente}</div>}
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>
-            {fmtPrecio(precio.valor)}
-          </div>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>{fmtPrecio(precio.valor)}</div>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>{fmtPct(precio.variacion)}</div>
           {spec.vencimiento && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginTop: '4px' }}>Vence {new Date(spec.vencimiento).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' })}</div>}
         </div>
@@ -187,7 +224,6 @@ function SearchResultRF({ r }: { r: any }) {
 
       {analytics && (
         <>
-          {/* Key metrics */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '10px' }}>
             <StatBox label="TIR (TEA)" value={analytics.tir != null ? `${analytics.tir.toFixed(2)}%` : '—'} color="var(--green)" />
             <StatBox label="Duration Mod." value={analytics.durationMod != null ? `${analytics.durationMod.toFixed(2)} años` : '—'} />
@@ -201,7 +237,6 @@ function SearchResultRF({ r }: { r: any }) {
             <StatBox label="Tasa cupón" value={spec.tasaCupon != null ? `${spec.tasaCupon}%` : '—'} />
           </div>
 
-          {/* OHLC */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
             <StatBox label="Apertura" value={fmtPrecio(precio.apertura)} />
             <StatBox label="Máximo" value={fmtPrecio(precio.maximo)} />
@@ -209,7 +244,6 @@ function SearchResultRF({ r }: { r: any }) {
             <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior)} />
           </div>
 
-          {/* Próximo pago */}
           {analytics.proximoPago && (
             <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: '10px', padding: '12px 16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
@@ -225,8 +259,7 @@ function SearchResultRF({ r }: { r: any }) {
             </div>
           )}
 
-          {/* Flujo de pagos */}
-          {analytics.flujos && analytics.flujos.length > 0 && (
+          {analytics.flujos?.length > 0 && (
             <div style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                 <div className="label-xs">💵 Flujo de pagos ({analytics.cantFlujos} cuotas)</div>
@@ -271,7 +304,6 @@ function SearchResultRF({ r }: { r: any }) {
             </div>
           )}
 
-          {/* Simulador */}
           <div style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '12px', padding: '16px' }}>
             <button onClick={() => setShowSim(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--violet-light)', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', width: '100%', padding: 0 }}>
               <Calculator size={16} />
@@ -303,7 +335,7 @@ function SearchResultRF({ r }: { r: any }) {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
                         <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                            {['#', 'Fecha', `Interés ${esUSD ? 'USD' : 'ARS'}`, `Amortiz. ${esUSD ? 'USD' : 'ARS'}`, `Total ${esUSD ? 'USD' : 'ARS'}`].map(h => (
+                            {['#', 'Fecha', `Interés`, `Amortiz.`, `Total`].map(h => (
                               <th key={h} style={{ padding: '6px 10px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'right', whiteSpace: 'nowrap' }}>{h}</th>
                             ))}
                           </tr>
@@ -315,18 +347,18 @@ function SearchResultRF({ r }: { r: any }) {
                               <td style={{ padding: '6px 10px', color: 'var(--text2)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                                 {new Date(f.fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
                               </td>
-                              <td style={{ padding: '6px 10px', color: 'var(--green)', textAlign: 'right' }}>{esUSD ? '$' : '$'}{f.interesT.toFixed(2)}</td>
-                              <td style={{ padding: '6px 10px', color: f.amortT > 0 ? 'var(--amber)' : 'var(--muted)', textAlign: 'right' }}>{esUSD ? '$' : '$'}{f.amortT.toFixed(2)}</td>
-                              <td style={{ padding: '6px 10px', color: 'var(--text)', fontWeight: 600, textAlign: 'right' }}>{esUSD ? '$' : '$'}{f.totalT.toFixed(2)}</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--green)', textAlign: 'right' }}>${f.interesT.toFixed(2)}</td>
+                              <td style={{ padding: '6px 10px', color: f.amortT > 0 ? 'var(--amber)' : 'var(--muted)', textAlign: 'right' }}>${f.amortT.toFixed(2)}</td>
+                              <td style={{ padding: '6px 10px', color: 'var(--text)', fontWeight: 600, textAlign: 'right' }}>${f.totalT.toFixed(2)}</td>
                             </tr>
                           ))}
                         </tbody>
                         <tfoot>
                           <tr style={{ borderTop: '2px solid var(--border2)' }}>
                             <td colSpan={2} />
-                            <td style={{ padding: '8px 10px', color: 'var(--green)', fontWeight: 700, textAlign: 'right' }}>{esUSD ? '$' : '$'}{simResult.flujos.reduce((s: number, f: any) => s + f.interesT, 0).toFixed(2)}</td>
-                            <td style={{ padding: '8px 10px', color: 'var(--amber)', fontWeight: 700, textAlign: 'right' }}>{esUSD ? '$' : '$'}{simResult.flujos.reduce((s: number, f: any) => s + f.amortT, 0).toFixed(2)}</td>
-                            <td style={{ padding: '8px 10px', color: 'var(--text)', fontWeight: 700, textAlign: 'right' }}>{esUSD ? '$' : '$'}{simResult.totalCobros.toFixed(2)}</td>
+                            <td style={{ padding: '8px 10px', color: 'var(--green)', fontWeight: 700, textAlign: 'right' }}>${simResult.flujos.reduce((s: number, f: any) => s + f.interesT, 0).toFixed(2)}</td>
+                            <td style={{ padding: '8px 10px', color: 'var(--amber)', fontWeight: 700, textAlign: 'right' }}>${simResult.flujos.reduce((s: number, f: any) => s + f.amortT, 0).toFixed(2)}</td>
+                            <td style={{ padding: '8px 10px', color: 'var(--text)', fontWeight: 700, textAlign: 'right' }}>${simResult.totalCobros.toFixed(2)}</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -342,7 +374,7 @@ function SearchResultRF({ r }: { r: any }) {
       {!analytics && (
         <div style={{ marginTop: '12px', padding: '12px 16px', background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: '8px' }}>
           <div style={{ fontSize: '13px', color: 'var(--amber)', fontFamily: 'Syne, sans-serif', fontWeight: 700, marginBottom: '4px' }}>Analytics no disponibles</div>
-          <div style={{ fontSize: '12px', color: 'var(--muted2)' }}>Este instrumento no está en nuestra base de datos. Mostrando datos básicos de IOL.</div>
+          <div style={{ fontSize: '12px', color: 'var(--muted2)' }}>Mostrando datos básicos de IOL.</div>
         </div>
       )}
     </div>
@@ -398,7 +430,6 @@ export default function MercadoPage() {
 
   return (
     <div style={{ maxWidth: '1100px' }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
         <div>
           <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Mercado</h1>
@@ -442,6 +473,8 @@ export default function MercadoPage() {
             </div>
           ) : result.tipo === 'renta_fija' ? (
             <SearchResultRF r={result} />
+          ) : result.tipo === 'cedear' ? (
+            <SearchResultCedear r={result} />
           ) : (
             <SearchResultRV r={result} />
           )
