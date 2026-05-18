@@ -52,7 +52,7 @@ function SearchResultRV({ r }: { r: any }) {
             {r.exchange && <Badge label={r.exchange} color="var(--violet-light)" />}
             {r.moneda && <Badge label={r.moneda} color="var(--muted2)" />}
           </div>
-          {r.fechaHora && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Último dato: {new Date(r.fechaHora).toLocaleString('es-AR')}</div>}
+          {r.fechaHora && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Último: {new Date(r.fechaHora).toLocaleString('es-AR')}</div>}
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>{fmtUSD(r.precio)}</div>
@@ -132,14 +132,17 @@ function SearchResultRV({ r }: { r: any }) {
 function SearchResultCedear({ r }: { r: any }) {
   const precio = r.precio || {};
   const esUSD = precio.moneda === 'USD';
+  const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
+
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: '22px', color: 'var(--text)' }}>{r.ticker}</span>
             <Badge label="CEDEAR" color="var(--violet-light)" />
-            <Badge label={esUSD ? '💵 USD · Seg. D' : '🇦🇷 ARS'} color={esUSD ? 'var(--blue)' : 'var(--green)'} />
+            <Badge label={esUSD ? '💵 USD · Seg. D' : '🇦🇷 ARS · Seg. 48hs'} color={esUSD ? 'var(--blue)' : 'var(--green)'} />
             {r.fuente && <Badge label={r.fuente} color="var(--muted)" />}
           </div>
           {r.nombre && <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '2px' }}>{r.nombre}</div>}
@@ -147,7 +150,7 @@ function SearchResultCedear({ r }: { r: any }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>
-            {esUSD ? fmtUSD(precio.valor) : fmtARS(precio.valor)}
+            {fmtPrecio(precio.valor)}
           </div>
           {precio.variacion != null && (
             <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>
@@ -157,12 +160,42 @@ function SearchResultCedear({ r }: { r: any }) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-        <StatBox label="Apertura" value={esUSD ? fmtUSD(r.apertura ?? null) : fmtARS(r.apertura ?? null)} />
-        <StatBox label="Máximo" value={esUSD ? fmtUSD(r.maximo ?? null) : fmtARS(r.maximo ?? null)} />
-        <StatBox label="Mínimo" value={esUSD ? fmtUSD(r.minimo ?? null) : fmtARS(r.minimo ?? null)} />
-        <StatBox label="Cierre ant." value={esUSD ? fmtUSD(r.cierreAnterior ?? null) : fmtARS(r.cierreAnterior ?? null)} />
+      {/* OHLC */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
+        <StatBox label="Apertura" value={fmtPrecio(precio.apertura ?? null)} />
+        <StatBox label="Máximo" value={fmtPrecio(precio.maximo ?? null)} />
+        <StatBox label="Mínimo" value={fmtPrecio(precio.minimo ?? null)} />
+        <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior ?? null)} />
       </div>
+
+      {/* Rango 52 semanas */}
+      {(r.maximo52 != null || r.minimo52 != null) && (
+        <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <div className="label-xs" style={{ marginBottom: '6px' }}>Rango 52 semanas (subyacente)</div>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo52)} — {fmtUSD(r.maximo52)}</div>
+          </div>
+          {r.minimo52 != null && r.maximo52 != null && precio.valor != null && (
+            <div style={{ position: 'relative', height: '4px', background: 'var(--border)', borderRadius: '2px' }}>
+              <div style={{ height: '100%', borderRadius: '2px', background: 'linear-gradient(to right, var(--red), var(--amber), var(--green))' }} />
+              <div style={{ position: 'absolute', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--violet)', top: '-3px', transform: 'translateX(-50%)', left: `${Math.max(0, Math.min(100, ((precio.valor - r.minimo52) / (r.maximo52 - r.minimo52)) * 100))}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Fundamentals del subyacente */}
+      {(r.marketCap != null || r.per != null || r.beta != null) && (
+        <>
+          <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals (subyacente US)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+            {r.marketCap != null && <StatBox label="Market Cap" value={fmtM(r.marketCap)} />}
+            {r.per != null && <StatBox label="P/E" value={fmtNum(r.per)} />}
+            {r.eps != null && <StatBox label="EPS" value={fmtUSD(r.eps)} />}
+            {r.beta != null && <StatBox label="Beta" value={fmtNum(r.beta)} />}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -335,7 +368,7 @@ function SearchResultRF({ r }: { r: any }) {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
                         <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                            {['#', 'Fecha', `Interés`, `Amortiz.`, `Total`].map(h => (
+                            {['#', 'Fecha', 'Interés', 'Amortiz.', 'Total'].map(h => (
                               <th key={h} style={{ padding: '6px 10px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'right', whiteSpace: 'nowrap' }}>{h}</th>
                             ))}
                           </tr>
@@ -450,7 +483,7 @@ export default function MercadoPage() {
             <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
             <input
               className="input-field" style={{ paddingLeft: '36px' }}
-              placeholder="GD35 (ARS) · GD35D (USD) · YCA6O · AAPL · YPFD..."
+              placeholder="GD35 · GD35D · YCA6O · AAPL · GOOGL · GOGLD..."
               value={query}
               onChange={e => setQuery(e.target.value.toUpperCase())}
               onKeyDown={e => e.key === 'Enter' && handleSearch()}
