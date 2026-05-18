@@ -23,8 +23,13 @@ export async function balanzGet(path: string) {
 
 export function parsearFlujoBalanz(flujos: any[]): FlujoPago[] {
   if (!Array.isArray(flujos)) return [];
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
   return flujos
-    .filter((f: any) => f && f.fecha)
+    .filter((f: any) => {
+      if (!f || !f.fecha) return false;
+      return new Date(f.fecha) >= hoy; // ← solo fechas futuras
+    })
     .map((f: any) => {
       const interes = parseFloat(f.cupon ?? f.interes ?? f.renta ?? f.intereses ?? 0);
       const amort = parseFloat(f.amortizacion ?? f.capital ?? f.amort ?? 0);
@@ -44,7 +49,14 @@ export function parsearIndicadoresBalanz(indicadores: any[]) {
   const get = (...keys: string[]): number | null => {
     for (const k of keys) {
       const v = ind[k];
-      if (v != null && v !== '' && !isNaN(parseFloat(v)) && parseFloat(v) !== 0) return +parseFloat(v).toFixed(4);
+      if (v == null || v === '' || v === 'NaN') continue;
+      const n = parseFloat(v);
+      if (isNaN(n) || n === 0) continue;
+      // Sanidad: TIR no puede ser mayor a 500% ni menor a -50%
+      if (k === 'tir' || k === 'TIR' || k === 'rendimiento') {
+        if (n > 500 || n < -50) continue;
+      }
+      return +n.toFixed(4);
     }
     return null;
   };
