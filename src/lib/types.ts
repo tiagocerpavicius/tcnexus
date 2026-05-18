@@ -1,3 +1,7 @@
+export type Moneda = 'USD' | 'ARS' | 'USD_linked';
+export type Ley = 'argentina' | 'nueva_york' | 'otro';
+export type TipoBono = 'soberano' | 'provincial' | 'ON';
+
 export interface Cotizacion {
   ticker: string;
   precio: number | null;
@@ -26,48 +30,10 @@ export interface Noticia {
   imagen: string | null;
 }
 
-export interface Operacion {
-  id: string;
+export interface FlujoPago {
   fecha: string;
-  ticker: string;
-  nombre?: string;
-  tipo: 'COMPRA' | 'VENTA' | 'DIVIDENDO';
-  cantidad: number;
-  precio: number;
-  monto: number;
-  moneda: string;
-  broker?: string;
-  comision: number;
-  notas?: string;
-  importacion_id?: string;
-}
-
-export interface Caucion {
-  id: string;
-  descripcion: string;
-  monto: number;
-  tna: number;
-  plazo: number;
-  fecha_inicio: string;
-  renovaciones: number;
-}
-
-export interface CaucionPeriodo {
-  id: string;
-  caucion_id: string;
-  monto: number;
-  tna: number;
-  plazo: number;
-  fecha_inicio: string;
-  intereses: number;
-}
-
-export interface CedearArb {
-  id: string;
-  ticker: string;
-  cantidad: number;
-  precio_compra: number;
-  precio_actual: number;
-  precio_venta?: number;
-  fecha_venta?: string;
+  interes: number;
+  amortizacion: number;
+  total: number;
+  vnVigente?: number;
 }
