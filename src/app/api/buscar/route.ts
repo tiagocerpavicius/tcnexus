@@ -49,19 +49,19 @@ async function getIOLPrecio(token: string, ticker: string) {
   } catch { return null; }
 }
 
-// Timeout de 4s por intento + una retry. Fallback a quotes si details falla.
+// 1 intento con 7s (cubre el caso GOOGLEFINANCE 3.5s + overhead).
+// Si falla, fallback a quotes con 3s.
 async function getYahooDetails(ticker: string, suffix: string) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
-      const url = `${process.env.APPS_SCRIPT_URL}?action=details&ticker=${ticker}&suffix=${encodeURIComponent(suffix)}`;
-      const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
-      clearTimeout(timer);
-      const data = await res.json();
-      if (data?.precio != null && !data.error) return data;
-    } catch {}
-  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    const url = `${process.env.APPS_SCRIPT_URL}?action=details&ticker=${ticker}&suffix=${encodeURIComponent(suffix)}`;
+    const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data?.precio != null && !data.error) return data;
+  } catch {}
+  // Fallback: solo precio
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
