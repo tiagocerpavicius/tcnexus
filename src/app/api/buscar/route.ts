@@ -228,23 +228,23 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // Acción AR (ej: YPFD) — precio de IOL, fundamentals lazy desde /api/fundamentals
-      if (!esCedearARS && !descripcionEsBono(desc)) {
-        return NextResponse.json({
-          ticker, tipo: 'renta_variable', fuente: 'IOL',
-          nombre: desc,
-          usTicker: ticker, sufixFundamentals: '.BA',
-          precio: iolRaw.ultimoPrecio,
-          variacion: iolRaw.variacion ?? null,
-          apertura: iolRaw.apertura ?? null,
-          maximo: iolRaw.maximo ?? null,
-          minimo: iolRaw.minimo ?? null,
-          cierreAnterior: iolRaw.cierreAnterior ?? null,
-          fechaHora: iolRaw.fechaHora ?? null,
-          marketCap: null, per: null, eps: null, beta: null,
-          maximo52: null, minimo52: null,
-        });
-      }
+     // Acción AR (ej: YPFD) — sin lazy fundamentals (GOOGLEFINANCE no los tiene para BYMA)
+if (!esCedearARS && !descripcionEsBono(desc)) {
+  return NextResponse.json({
+    ticker, tipo: 'renta_variable', fuente: 'IOL',
+    nombre: desc,
+    // Sin usTicker → el hook no llama a /api/fundamentals
+    precio: iolRaw.ultimoPrecio,
+    variacion: iolRaw.variacion ?? null,
+    apertura: iolRaw.apertura ?? null,
+    maximo: iolRaw.maximo ?? null,
+    minimo: iolRaw.minimo ?? null,
+    cierreAnterior: iolRaw.cierreAnterior ?? null,
+    fechaHora: iolRaw.fechaHora ?? null,
+    marketCap: null, per: null, eps: null, beta: null,
+    maximo52: null, minimo52: null,
+  });
+}
 
       // Bono IOL básico
       if (!esCedearARS) {
