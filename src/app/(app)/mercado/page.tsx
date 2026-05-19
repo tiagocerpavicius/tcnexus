@@ -3,7 +3,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, TrendingDown, RefreshCw, Search, X, ChevronDown, ChevronUp, Calculator } from 'lucide-react';
 import type { Cotizacion, DolarRate } from '@/lib/types';
 
-const US_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'GOOGL'];
 const DOLAR_NOMBRES: Record<string, string> = { oficial: 'Oficial', blue: 'Blue', bolsa: 'MEP', contadoconliqui: 'CCL' };
 const RECOM: Record<string, { label: string; color: string }> = {
   strong_buy: { label: 'Compra Fuerte', color: 'var(--green)' },
@@ -38,8 +37,6 @@ function Badge({ label, color }: { label: string; color: string }) {
   );
 }
 
-// ── RENTA VARIABLE ────────────────────────────────────────
-
 function SearchResultRV({ r }: { r: any }) {
   const recom = r.recomendacion ? RECOM[r.recomendacion] : null;
   return (
@@ -61,7 +58,6 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         </div>
       </div>
-
       <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '10px' }}>
           <div><div className="label-xs" style={{ marginBottom: '6px' }}>Rango del día</div><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo)} — {fmtUSD(r.maximo)}</div></div>
@@ -74,14 +70,12 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         )}
       </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
         <StatBox label="Apertura" value={fmtUSD(r.apertura)} />
         <StatBox label="Cierre ant." value={fmtUSD(r.cierreAnterior)} />
         <StatBox label="Volumen" value={fmtM(r.volumen)} />
         <StatBox label="Vol. prom." value={fmtM(r.volumenPromedio)} />
       </div>
-
       {(r.marketCap != null || r.per != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals</div>
@@ -97,7 +91,6 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         </>
       )}
-
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
         {(r.dividendo != null || r.rendDividendo != null) && (
           <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px' }}>
@@ -127,16 +120,12 @@ function SearchResultRV({ r }: { r: any }) {
   );
 }
 
-// ── CEDEAR ────────────────────────────────────────────────
-
 function SearchResultCedear({ r }: { r: any }) {
   const precio = r.precio || {};
   const esUSD = precio.moneda === 'USD';
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
-
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
@@ -149,26 +138,16 @@ function SearchResultCedear({ r }: { r: any }) {
           {precio.fechaHora && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Último: {new Date(precio.fechaHora).toLocaleString('es-AR')}</div>}
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>
-            {fmtPrecio(precio.valor)}
-          </div>
-          {precio.variacion != null && (
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>
-              {fmtPct(precio.variacion)}
-            </div>
-          )}
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '32px', fontWeight: 600, color: 'var(--text)', lineHeight: 1 }}>{fmtPrecio(precio.valor)}</div>
+          {precio.variacion != null && <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>{fmtPct(precio.variacion)}</div>}
         </div>
       </div>
-
-      {/* OHLC */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
         <StatBox label="Apertura" value={fmtPrecio(precio.apertura ?? null)} />
         <StatBox label="Máximo" value={fmtPrecio(precio.maximo ?? null)} />
         <StatBox label="Mínimo" value={fmtPrecio(precio.minimo ?? null)} />
         <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior ?? null)} />
       </div>
-
-      {/* Rango 52 semanas */}
       {(r.maximo52 != null || r.minimo52 != null) && (
         <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
           <div style={{ marginBottom: '10px' }}>
@@ -183,8 +162,6 @@ function SearchResultCedear({ r }: { r: any }) {
           )}
         </div>
       )}
-
-      {/* Fundamentals del subyacente */}
       {(r.marketCap != null || r.per != null || r.beta != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals (subyacente US)</div>
@@ -199,8 +176,6 @@ function SearchResultCedear({ r }: { r: any }) {
     </div>
   );
 }
-
-// ── RENTA FIJA ────────────────────────────────────────────
 
 function SearchResultRF({ r }: { r: any }) {
   const [vnSim, setVnSim] = useState('10000');
@@ -233,7 +208,6 @@ function SearchResultRF({ r }: { r: any }) {
 
   return (
     <div className="card fade-in" style={{ borderColor: esUSD ? 'rgba(59,130,246,0.35)' : 'rgba(16,185,129,0.35)' }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
@@ -269,7 +243,6 @@ function SearchResultRF({ r }: { r: any }) {
             <StatBox label="Interés corrido" value={analytics.interesCorreido != null ? `$${analytics.interesCorreido.toFixed(4)}` : '—'} />
             <StatBox label="Tasa cupón" value={spec.tasaCupon != null ? `${spec.tasaCupon}%` : '—'} />
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
             <StatBox label="Apertura" value={fmtPrecio(precio.apertura)} />
             <StatBox label="Máximo" value={fmtPrecio(precio.maximo)} />
@@ -343,7 +316,6 @@ function SearchResultRF({ r }: { r: any }) {
               Simulador de inversión
               {showSim ? <ChevronUp size={14} style={{ marginLeft: 'auto' }} /> : <ChevronDown size={14} style={{ marginLeft: 'auto' }} />}
             </button>
-
             {showSim && (
               <div style={{ marginTop: '16px' }}>
                 <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', alignItems: 'flex-end' }}>
@@ -353,7 +325,6 @@ function SearchResultRF({ r }: { r: any }) {
                   </div>
                   <button className="btn-primary" onClick={handleSimular}>Calcular</button>
                 </div>
-
                 {simResult && (
                   <div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
@@ -414,13 +385,11 @@ function SearchResultRF({ r }: { r: any }) {
   );
 }
 
-// ── PÁGINA PRINCIPAL ──────────────────────────────────────
-
 export default function MercadoPage() {
   const [acciones, setAcciones] = useState<Cotizacion[]>([]);
   const [bonos, setBonos] = useState<Cotizacion[]>([]);
+  const [cedears, setCedears] = useState<Cotizacion[]>([]);
   const [dolar, setDolar] = useState<DolarRate[]>([]);
-  const [quotesUS, setQuotesUS] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -431,21 +400,25 @@ export default function MercadoPage() {
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [mRes, dRes, uRes] = await Promise.all([
-        fetch('/api/mercado'), fetch('/api/dolar'),
-        fetch(`/api/quotes?tickers=${US_TICKERS.join(',')}&suffix=`),
+      const [mRes, dRes] = await Promise.all([
+        fetch('/api/mercado'),
+        fetch('/api/dolar'),
       ]);
-      const [m, d, u] = await Promise.all([mRes.json(), dRes.json(), uRes.json()]);
+      const [m, d] = await Promise.all([mRes.json(), dRes.json()]);
       if (m.acciones) setAcciones(m.acciones);
       if (m.bonos) setBonos(m.bonos);
+      if (m.cedears) setCedears(m.cedears);
       if (Array.isArray(d)) setDolar(d);
-      setQuotesUS(u || {});
       setLastUpdate(new Date());
     } catch (e) { console.error(e); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    // Pre-calentar Apps Script en background para que la primera búsqueda sea rápida
+    fetch('/api/quotes?tickers=AAPL&suffix=').catch(() => {});
+  }, [fetchAll]);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -476,7 +449,6 @@ export default function MercadoPage() {
         </button>
       </div>
 
-      {/* Buscador */}
       <div style={{ marginBottom: '28px' }}>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '440px' }}>
@@ -551,11 +523,14 @@ export default function MercadoPage() {
             </div>
 
             <div className="card">
-              <div className="label-xs" style={{ marginBottom: '16px' }}>🇺🇸 Acciones US</div>
-              {US_TICKERS.map((ticker, i) => (
-                <div key={ticker} onClick={() => setQuery(ticker)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: i < US_TICKERS.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
-                  <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--violet-light)' }}>{ticker}</span>
-                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: 'var(--text)' }}>{quotesUS[ticker] ? fmtUSD(quotesUS[ticker]) : '—'}</span>
+              <div className="label-xs" style={{ marginBottom: '16px' }}>🇺🇸 CEDEARs · ARS</div>
+              {cedears.length === 0 ? (
+                <div style={{ color: 'var(--muted)', fontSize: '13px', fontFamily: 'DM Mono, monospace' }}>Cargando...</div>
+              ) : cedears.map((c, i) => (
+                <div key={c.ticker} onClick={() => setQuery(c.ticker)} style={{ display: 'grid', gridTemplateColumns: '70px 1fr auto', alignItems: 'center', padding: '10px 0', borderBottom: i < cedears.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                  <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--violet-light)' }}>{c.ticker}</span>
+                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtARS(c.precio)}</span>
+                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: colorV(c.variacion), textAlign: 'right' }}>{fmtPct(c.variacion)}</span>
                 </div>
               ))}
             </div>
