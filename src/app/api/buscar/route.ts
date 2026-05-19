@@ -5,21 +5,17 @@ import { balanzGet, parsearFlujoBalanz, parsearIndicadoresBalanz, getMep } from 
 const IOL_TOKEN_URL = 'https://api.invertironline.com/token';
 const IOL_API = 'https://api.invertironline.com/api/v2';
 
-// CEDEARs cuyo ticker en ARS termina en D (el D es parte del nombre, NO indica segmento USD).
-// Para estos, el USD se forma con doble D: YPFD (ARS) → YPFDD (USD).
+// CEDEARs cuyo ticker ARS termina en D (NO indica segmento USD)
 const ARS_TERMINAN_EN_D = new Set(['YPFD']);
 
-// Mapa de base-ticker → ticker US real para Yahoo/Apps Script.
-// Incluye bases de tickers DD (YPFDD → base YPFD → subyacente YPF).
 const CEDEAR_A_US: Record<string, string> = {
   'GOGL': 'GOOGL',
   'BRKB': 'BRK-B',
   'DISN': 'DIS',
   'GOLD': 'GOLD',
-  'YPFD': 'YPF',   // cubre YPFD (ARS) y YPFDD (USD, base = YPFD)
-  'GLD': 'GLD',    // cubre GLD (ARS) y GLDD (USD, base = GLD)
+  'YPFD': 'YPF',
+  'GLD': 'GLD',
 };
-
 function getUSTicker(base: string): string {
   return CEDEAR_A_US[base] || base;
 }
@@ -79,6 +75,23 @@ function parsearVto(desc: string): string | null {
   if (!m) return null;
   const y = m[3].length === 2 ? '20' + m[3] : m[3];
   return `${y}-${m[2]}-${m[1]}`;
+}
+
+// Detecta si una descripción de IOL corresponde a un bono/ON (no acción)
+function descripcionEsBono(desc: string): boolean {
+  const d = desc.toLowerCase();
+  return (
+    d.includes('bono') ||
+    d.includes('obligac') ||
+    d.includes(' on ') ||
+    d.startsWith('on ') ||
+    d.includes('letra') ||
+    d.includes('letes') ||
+    d.includes('lecap') ||
+    d.includes('lete') ||
+    /v\.\d{2}\/\d{2}\/\d{2,4}/.test(d) ||
+    /\d+(\.\d+)?%/.test(d)
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -264,6 +277,15 @@ export async function GET(request: NextRequest) {
       }
 
       if (!esCedearARS) {
+        // Si la descripción NO parece un bono, intentar como acción AR (ej: YPFD)
+        if (!descripcionEsBono(desc)) {
+          const detailsAR = await getYahooDetails(ticker, '.BA');
+          if (detailsAR?.precio) {
+            return NextResponse.json({ ...detailsAR, tipo: 'renta_variable' });
+          }
+        }
+
+        // Es un bono con datos básicos de IOL
         return NextResponse.json({
           ticker, tipo: 'renta_fija', fuente: 'IOL básico',
           enBaseDeDatos: false, monedaLabel,
