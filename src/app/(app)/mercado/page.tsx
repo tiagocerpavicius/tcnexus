@@ -37,8 +37,35 @@ function Badge({ label, color }: { label: string; color: string }) {
   );
 }
 
+// Hook para lazy loading de fundamentals
+function useFundamentals(usTicker: string | null, sufixFundamentals: string) {
+  const [funds, setFunds] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!usTicker) return;
+    setLoading(true);
+    fetch(`/api/fundamentals?ticker=${encodeURIComponent(usTicker)}&suffix=${encodeURIComponent(sufixFundamentals)}`)
+      .then(r => r.json())
+      .then(data => { if (!data.error) setFunds(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [usTicker, sufixFundamentals]);
+
+  return { funds, loading };
+}
+
 function SearchResultRV({ r }: { r: any }) {
+  const { funds, loading } = useFundamentals(r.usTicker || null, r.sufixFundamentals || '.BA');
   const recom = r.recomendacion ? RECOM[r.recomendacion] : null;
+
+  const marketCap = funds?.marketCap ?? r.marketCap ?? null;
+  const per = funds?.per ?? r.per ?? null;
+  const eps = funds?.eps ?? r.eps ?? null;
+  const beta = funds?.beta ?? r.beta ?? null;
+  const maximo52 = funds?.maximo52 ?? r.maximo52 ?? null;
+  const minimo52 = funds?.minimo52 ?? r.minimo52 ?? null;
+
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
@@ -61,12 +88,12 @@ function SearchResultRV({ r }: { r: any }) {
       <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '10px' }}>
           <div><div className="label-xs" style={{ marginBottom: '6px' }}>Rango del día</div><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo)} — {fmtUSD(r.maximo)}</div></div>
-          <div><div className="label-xs" style={{ marginBottom: '6px' }}>Rango 52 semanas</div><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo52)} — {fmtUSD(r.maximo52)}</div></div>
+          <div><div className="label-xs" style={{ marginBottom: '6px' }}>Rango 52 semanas</div><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(minimo52)} — {fmtUSD(maximo52)}</div></div>
         </div>
-        {r.minimo52 != null && r.maximo52 != null && r.precio != null && (
+        {minimo52 != null && maximo52 != null && r.precio != null && (
           <div style={{ position: 'relative', height: '4px', background: 'var(--border)', borderRadius: '2px' }}>
             <div style={{ height: '100%', borderRadius: '2px', background: 'linear-gradient(to right, var(--red), var(--amber), var(--green))' }} />
-            <div style={{ position: 'absolute', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--violet)', top: '-3px', transform: 'translateX(-50%)', left: `${Math.max(0, Math.min(100, ((r.precio - r.minimo52) / (r.maximo52 - r.minimo52)) * 100))}%` }} />
+            <div style={{ position: 'absolute', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--violet)', top: '-3px', transform: 'translateX(-50%)', left: `${Math.max(0, Math.min(100, ((r.precio - minimo52) / (maximo52 - minimo52)) * 100))}%` }} />
           </div>
         )}
       </div>
@@ -76,15 +103,20 @@ function SearchResultRV({ r }: { r: any }) {
         <StatBox label="Volumen" value={fmtM(r.volumen)} />
         <StatBox label="Vol. prom." value={fmtM(r.volumenPromedio)} />
       </div>
-      {(r.marketCap != null || r.per != null) && (
+      {loading && (
+        <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>
+          Cargando fundamentals...
+        </div>
+      )}
+      {(marketCap != null || per != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
-            {r.marketCap != null && <StatBox label="Market Cap" value={fmtM(r.marketCap)} />}
-            {r.per != null && <StatBox label="P/E Trailing" value={fmtNum(r.per)} />}
+            {marketCap != null && <StatBox label="Market Cap" value={fmtM(marketCap)} />}
+            {per != null && <StatBox label="P/E Trailing" value={fmtNum(per)} />}
             {r.perFwd != null && <StatBox label="P/E Forward" value={fmtNum(r.perFwd)} />}
-            {r.eps != null && <StatBox label="EPS" value={fmtUSD(r.eps)} />}
-            {r.beta != null && <StatBox label="Beta" value={fmtNum(r.beta)} />}
+            {eps != null && <StatBox label="EPS" value={fmtUSD(eps)} />}
+            {beta != null && <StatBox label="Beta" value={fmtNum(beta)} />}
             {r.valorLibro != null && <StatBox label="Valor libro" value={fmtUSD(r.valorLibro)} />}
             {r.margenNeto != null && <StatBox label="Margen neto" value={fmtPct(r.margenNeto)} />}
             {r.roe != null && <StatBox label="ROE" value={fmtPct(r.roe)} />}
@@ -121,9 +153,18 @@ function SearchResultRV({ r }: { r: any }) {
 }
 
 function SearchResultCedear({ r }: { r: any }) {
+  const { funds, loading } = useFundamentals(r.usTicker || null, r.sufixFundamentals ?? '');
   const precio = r.precio || {};
   const esUSD = precio.moneda === 'USD';
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
+
+  const marketCap = funds?.marketCap ?? r.marketCap ?? null;
+  const per = funds?.per ?? r.per ?? null;
+  const eps = funds?.eps ?? r.eps ?? null;
+  const beta = funds?.beta ?? r.beta ?? null;
+  const maximo52 = funds?.maximo52 ?? r.maximo52 ?? null;
+  const minimo52 = funds?.minimo52 ?? r.minimo52 ?? null;
+
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
@@ -148,28 +189,33 @@ function SearchResultCedear({ r }: { r: any }) {
         <StatBox label="Mínimo" value={fmtPrecio(precio.minimo ?? null)} />
         <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior ?? null)} />
       </div>
-      {(r.maximo52 != null || r.minimo52 != null) && (
+      {loading && (
+        <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>
+          Cargando fundamentals...
+        </div>
+      )}
+      {(maximo52 != null || minimo52 != null) && (
         <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
           <div style={{ marginBottom: '10px' }}>
             <div className="label-xs" style={{ marginBottom: '6px' }}>Rango 52 semanas (subyacente)</div>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo52)} — {fmtUSD(r.maximo52)}</div>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(minimo52)} — {fmtUSD(maximo52)}</div>
           </div>
-          {r.minimo52 != null && r.maximo52 != null && precio.valor != null && (
+          {minimo52 != null && maximo52 != null && precio.valor != null && (
             <div style={{ position: 'relative', height: '4px', background: 'var(--border)', borderRadius: '2px' }}>
               <div style={{ height: '100%', borderRadius: '2px', background: 'linear-gradient(to right, var(--red), var(--amber), var(--green))' }} />
-              <div style={{ position: 'absolute', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--violet)', top: '-3px', transform: 'translateX(-50%)', left: `${Math.max(0, Math.min(100, ((precio.valor - r.minimo52) / (r.maximo52 - r.minimo52)) * 100))}%` }} />
+              <div style={{ position: 'absolute', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--violet)', top: '-3px', transform: 'translateX(-50%)', left: `${Math.max(0, Math.min(100, ((precio.valor - minimo52) / (maximo52 - minimo52)) * 100))}%` }} />
             </div>
           )}
         </div>
       )}
-      {(r.marketCap != null || r.per != null || r.beta != null) && (
+      {(marketCap != null || per != null || beta != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals (subyacente US)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            {r.marketCap != null && <StatBox label="Market Cap" value={fmtM(r.marketCap)} />}
-            {r.per != null && <StatBox label="P/E" value={fmtNum(r.per)} />}
-            {r.eps != null && <StatBox label="EPS" value={fmtUSD(r.eps)} />}
-            {r.beta != null && <StatBox label="Beta" value={fmtNum(r.beta)} />}
+            {marketCap != null && <StatBox label="Market Cap" value={fmtM(marketCap)} />}
+            {per != null && <StatBox label="P/E" value={fmtNum(per)} />}
+            {eps != null && <StatBox label="EPS" value={fmtUSD(eps)} />}
+            {beta != null && <StatBox label="Beta" value={fmtNum(beta)} />}
           </div>
         </>
       )}
@@ -187,7 +233,6 @@ function SearchResultRF({ r }: { r: any }) {
   const esUSD = r.monedaLabel === 'USD' || r.precio?.moneda === 'USD';
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
 
-  // Para bonos en ARS: traer MEP para convertir flujos USD → ARS en el simulador
   useEffect(() => {
     if (!esUSD) {
       fetch('/api/dolar')
@@ -205,11 +250,7 @@ function SearchResultRF({ r }: { r: any }) {
     const vn = parseFloat(vnSim);
     if (isNaN(vn) || vn <= 0) return;
     const factor = vn / 100;
-
-    // Para bonos ARS: precio en ARS, flujos en USD → convertir a ARS con MEP
-    // Para bonos USD: todo en USD
     const convFactor = esUSD ? 1 : mep;
-
     const inversion = +((r.precio?.valor ?? 0) / 100 * vn).toFixed(2);
     const flujos = r.analytics.flujos.map((f: any, i: number) => ({
       ...f, n: i + 1,
@@ -422,10 +463,7 @@ export default function MercadoPage() {
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [mRes, dRes] = await Promise.all([
-        fetch('/api/mercado'),
-        fetch('/api/dolar'),
-      ]);
+      const [mRes, dRes] = await Promise.all([fetch('/api/mercado'), fetch('/api/dolar')]);
       const [m, d] = await Promise.all([mRes.json(), dRes.json()]);
       if (m.acciones) setAcciones(m.acciones);
       if (m.bonos) setBonos(m.bonos);
@@ -438,7 +476,6 @@ export default function MercadoPage() {
 
   useEffect(() => {
     fetchAll();
-    // Pre-calentar Apps Script en background
     fetch('/api/quotes?tickers=AAPL&suffix=').catch(() => {});
   }, [fetchAll]);
 
