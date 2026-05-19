@@ -128,6 +128,7 @@ export const BONOS_DB: BondSpec[] = [
   { tickers: ['YCA6O'], nombre: 'YPF SA ON USD 6.95% 2027', emisor: 'YPF SA', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 6.95, frecuencia: 2, vencimiento: '2027-07-21', vnResidual: 100, amortizaciones: [] },
   { tickers: ['YFCAO'], nombre: 'YPF SA ON USD 9.5% 2029', emisor: 'YPF SA', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 9.5, frecuencia: 2, vencimiento: '2029-03-15', vnResidual: 100, amortizaciones: [], esAprox: true },
   { tickers: ['YMC3O'], nombre: 'YPF SA ON USD 8.75% 2028', emisor: 'YPF SA', tipo: 'ON', moneda: 'USD', ley: 'argentina', sector: 'Energía', tasaCupon: 8.75, frecuencia: 2, vencimiento: '2028-04-04', vnResidual: 100, amortizaciones: [], esAprox: true },
+  { tickers: ['YM34O'], nombre: 'YPF SA ON USD 8.25% 2034', emisor: 'YPF SA', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 8.25, frecuencia: 2, vencimiento: '2034-01-17', vnResidual: 100, amortizaciones: [], esAprox: true },
   { tickers: ['VSCAO'], nombre: 'Vista Energy ON USD 7.875% 2027', emisor: 'Vista Energy', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 7.875, frecuencia: 2, vencimiento: '2027-03-15', vnResidual: 100, amortizaciones: [] },
   { tickers: ['VSC2O'], nombre: 'Vista Energy ON USD 8.625% 2030', emisor: 'Vista Energy', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 8.625, frecuencia: 2, vencimiento: '2030-06-01', vnResidual: 100, amortizaciones: [], esAprox: true },
   { tickers: ['MGC1O'], nombre: 'Pampa Energía ON USD 7.375% 2029', emisor: 'Pampa Energía', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Energía', tasaCupon: 7.375, frecuencia: 2, vencimiento: '2029-07-21', vnResidual: 100, amortizaciones: [] },
@@ -149,7 +150,13 @@ export const BONOS_DB: BondSpec[] = [
   { tickers: ['RCCJO'], nombre: 'Arcor ON USD 6% 2027', emisor: 'Arcor', tipo: 'ON', moneda: 'USD', ley: 'nueva_york', sector: 'Consumo', tasaCupon: 6.0, frecuencia: 2, vencimiento: '2027-03-15', vnResidual: 100, amortizaciones: [], esAprox: true },
 ];
 
+// Para ONs en USD (ticker termina en D): busca también con sufijo O.
+// Ej: YM34D → prueba YM34 y YM34O → encuentra YM34O en la DB.
 export function buscarBono(ticker: string): BondSpec | null {
   const t = ticker.toUpperCase().replace(/D$/, '');
-  return BONOS_DB.find(b => b.tickers.some(bt => bt.toUpperCase() === t || bt.toUpperCase() === ticker.toUpperCase())) || null;
+  const tO = t.endsWith('O') ? t : t + 'O';
+  return BONOS_DB.find(b => b.tickers.some(bt => {
+    const btu = bt.toUpperCase();
+    return btu === t || btu === ticker.toUpperCase() || btu === tO;
+  })) || null;
 }
