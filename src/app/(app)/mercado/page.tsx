@@ -182,21 +182,40 @@ function SearchResultRF({ r }: { r: any }) {
   const [simResult, setSimResult] = useState<any>(null);
   const [showAllFlujos, setShowAllFlujos] = useState(false);
   const [showSim, setShowSim] = useState(false);
+  const [mep, setMep] = useState<number>(1430);
 
   const esUSD = r.monedaLabel === 'USD' || r.precio?.moneda === 'USD';
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
+
+  // Para bonos en ARS: traer MEP para convertir flujos USD → ARS en el simulador
+  useEffect(() => {
+    if (!esUSD) {
+      fetch('/api/dolar')
+        .then(r => r.json())
+        .then((data: any[]) => {
+          const bolsa = Array.isArray(data) ? data.find(d => d.casa === 'bolsa') : null;
+          if (bolsa?.venta) setMep(bolsa.venta);
+        })
+        .catch(() => {});
+    }
+  }, [esUSD]);
 
   const handleSimular = () => {
     if (!r.analytics?.flujos?.length) return;
     const vn = parseFloat(vnSim);
     if (isNaN(vn) || vn <= 0) return;
     const factor = vn / 100;
+
+    // Para bonos ARS: precio en ARS, flujos en USD → convertir a ARS con MEP
+    // Para bonos USD: todo en USD
+    const convFactor = esUSD ? 1 : mep;
+
     const inversion = +((r.precio?.valor ?? 0) / 100 * vn).toFixed(2);
     const flujos = r.analytics.flujos.map((f: any, i: number) => ({
       ...f, n: i + 1,
-      interesT: +(f.interes * factor).toFixed(2),
-      amortT: +(f.amortizacion * factor).toFixed(2),
-      totalT: +(f.total * factor).toFixed(2),
+      interesT: +(f.interes * factor * convFactor).toFixed(2),
+      amortT: +(f.amortizacion * factor * convFactor).toFixed(2),
+      totalT: +(f.total * factor * convFactor).toFixed(2),
     }));
     const totalCobros = +flujos.reduce((s: number, f: any) => s + f.totalT, 0).toFixed(2);
     setSimResult({ vn, inversion, flujos, totalCobros, ganancia: +(totalCobros - inversion).toFixed(2) });
@@ -320,7 +339,10 @@ function SearchResultRF({ r }: { r: any }) {
               <div style={{ marginTop: '16px' }}>
                 <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', alignItems: 'flex-end' }}>
                   <div style={{ flex: 1 }}>
-                    <div className="label-xs" style={{ marginBottom: '6px' }}>VN a comprar ({esUSD ? 'USD' : 'ARS'})</div>
+                    <div className="label-xs" style={{ marginBottom: '6px' }}>
+                      VN a comprar (USD)
+                      {!esUSD && <span style={{ color: 'var(--muted)', marginLeft: '6px', fontWeight: 400 }}>· flujos convertidos a ARS (MEP ${mep.toLocaleString('es-AR')})</span>}
+                    </div>
                     <input className="input-field" type="number" value={vnSim} onChange={e => setVnSim(e.target.value)} placeholder="10000" min="100" step="100" />
                   </div>
                   <button className="btn-primary" onClick={handleSimular}>Calcular</button>
@@ -328,10 +350,10 @@ function SearchResultRF({ r }: { r: any }) {
                 {simResult && (
                   <div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
-                      <StatBox label="VN Comprado" value={`${esUSD ? 'USD' : 'ARS'} ${simResult.vn.toLocaleString('es-AR')}`} />
-                      <StatBox label="Inversión total" value={fmtPrecio(simResult.inversion)} color="var(--amber)" />
-                      <StatBox label="Total cobros" value={fmtPrecio(simResult.totalCobros)} color="var(--green)" />
-                      <StatBox label="Ganancia neta" value={`${simResult.ganancia >= 0 ? '+' : ''}${fmtPrecio(simResult.ganancia)}`} color={simResult.ganancia >= 0 ? 'var(--green)' : 'var(--red)'} />
+                      <StatBox label="VN Comprado" value={`USD ${simResult.vn.toLocaleString('es-AR')}`} />
+                      <StatBox label={esUSD ? 'Inversión (USD)' : 'Inversión (ARS)'} value={fmtPrecio(simResult.inversion)} color="var(--amber)" />
+                      <StatBox label={esUSD ? 'Total cobros (USD)' : 'Total cobros (ARS)'} value={fmtPrecio(simResult.totalCobros)} color="var(--green)" />
+                      <StatBox label={esUSD ? 'Ganancia neta (USD)' : 'Ganancia neta (ARS)'} value={`${simResult.ganancia >= 0 ? '+' : ''}${fmtPrecio(simResult.ganancia)}`} color={simResult.ganancia >= 0 ? 'var(--green)' : 'var(--red)'} />
                       <StatBox label="TIR (TEA)" value={analytics.tir != null ? `${analytics.tir.toFixed(2)}%` : '—'} color="var(--green)" />
                       <StatBox label="Cuotas" value={`${simResult.flujos.length} pagos`} />
                     </div>
@@ -416,7 +438,7 @@ export default function MercadoPage() {
 
   useEffect(() => {
     fetchAll();
-    // Pre-calentar Apps Script en background para que la primera búsqueda sea rápida
+    // Pre-calentar Apps Script en background
     fetch('/api/quotes?tickers=AAPL&suffix=').catch(() => {});
   }, [fetchAll]);
 
