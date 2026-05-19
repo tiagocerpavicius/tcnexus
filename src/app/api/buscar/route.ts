@@ -5,12 +5,21 @@ import { balanzGet, parsearFlujoBalanz, parsearIndicadoresBalanz, getMep } from 
 const IOL_TOKEN_URL = 'https://api.invertironline.com/token';
 const IOL_API = 'https://api.invertironline.com/api/v2';
 
+// CEDEARs cuyo ticker en ARS termina en D (el D es parte del nombre, NO indica segmento USD).
+// Para estos, el USD se forma con doble D: YPFD (ARS) → YPFDD (USD).
+const ARS_TERMINAN_EN_D = new Set(['YPFD']);
+
+// Mapa de base-ticker → ticker US real para Yahoo/Apps Script.
+// Incluye bases de tickers DD (YPFDD → base YPFD → subyacente YPF).
 const CEDEAR_A_US: Record<string, string> = {
   'GOGL': 'GOOGL',
   'BRKB': 'BRK-B',
   'DISN': 'DIS',
   'GOLD': 'GOLD',
+  'YPFD': 'YPF',   // cubre YPFD (ARS) y YPFDD (USD, base = YPFD)
+  'GLD': 'GLD',    // cubre GLD (ARS) y GLDD (USD, base = GLD)
 };
+
 function getUSTicker(base: string): string {
   return CEDEAR_A_US[base] || base;
 }
@@ -76,7 +85,7 @@ export async function GET(request: NextRequest) {
   const ticker = request.nextUrl.searchParams.get('ticker')?.toUpperCase().trim();
   if (!ticker) return NextResponse.json({ error: 'Ticker requerido' }, { status: 400 });
 
-  const esD = ticker.endsWith('D');
+  const esD = ticker.endsWith('D') && !ARS_TERMINAN_EN_D.has(ticker);
   const monedaLabel = esD ? 'USD' : 'ARS';
   const token = await getToken();
 
