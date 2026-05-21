@@ -1,21 +1,22 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, TrendingDown, RefreshCw, Search, X, ChevronDown, ChevronUp, Calculator } from 'lucide-react';
+import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import type { Cotizacion, DolarRate } from '@/lib/types';
 
 const DOLAR_NOMBRES: Record<string, string> = { oficial: 'Oficial', blue: 'Blue', bolsa: 'MEP', contadoconliqui: 'CCL' };
 const RECOM: Record<string, { label: string; color: string }> = {
-  strong_buy: { label: 'Compra Fuerte', color: 'var(--green)' },
-  buy: { label: 'Compra', color: '#34d399' },
-  hold: { label: 'Mantener', color: 'var(--amber)' },
-  sell: { label: 'Venta', color: '#f87171' },
-  strong_sell: { label: 'Venta Fuerte', color: 'var(--red)' },
+  strong_buy:   { label: 'Compra Fuerte', color: 'var(--green)' },
+  buy:          { label: 'Compra',        color: '#34d399' },
+  hold:         { label: 'Mantener',      color: 'var(--amber)' },
+  sell:         { label: 'Venta',         color: '#f87171' },
+  strong_sell:  { label: 'Venta Fuerte',  color: 'var(--red)' },
 };
 
 const fmtUSD = (n: number | null) => n == null ? '—' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtARS = (n: number | null) => n == null ? '—' : '$' + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPct = (n: number | null) => n == null ? '—' : (n > 0 ? '+' : '') + n.toFixed(2) + '%';
-const fmtM = (n: number | null) => { if (n == null) return '—'; if (Math.abs(n) >= 1e12) return (n / 1e12).toFixed(2) + 'T'; if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + 'B'; if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M'; return n.toLocaleString('es-AR'); };
+const fmtM   = (n: number | null) => { if (n == null) return '—'; if (Math.abs(n) >= 1e12) return (n / 1e12).toFixed(2) + 'T'; if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + 'B'; if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M'; return n.toLocaleString('es-AR'); };
 const fmtNum = (n: number | null) => n == null ? '—' : n.toLocaleString('es-AR', { maximumFractionDigits: 2 });
 const colorV = (n: number | null) => n == null ? 'var(--text2)' : n > 0 ? 'var(--green)' : n < 0 ? 'var(--red)' : 'var(--text2)';
 
@@ -37,34 +38,133 @@ function Badge({ label, color }: { label: string; color: string }) {
   );
 }
 
-// Hook para lazy loading de fundamentals
-function useFundamentals(usTicker: string | null, sufixFundamentals: string) {
+// Gráfico de dona con recomendaciones de analistas estilo Investing
+function AnalystChart({ strongBuy, buy, hold, sell, strongSell, precioObjetivo, precio, numAnalistas }: {
+  strongBuy: number; buy: number; hold: number; sell: number; strongSell: number;
+  precioObjetivo?: number | null; precio?: number | null; numAnalistas?: number | null;
+}) {
+  const total = strongBuy + buy + hold + sell + strongSell;
+  if (total === 0) return null;
+
+  const segments = [
+    { name: 'Compra Fuerte', value: strongBuy,  color: '#22c55e' },
+    { name: 'Compra',        value: buy,         color: '#86efac' },
+    { name: 'Mantener',      value: hold,        color: '#f59e0b' },
+    { name: 'Venta',         value: sell,        color: '#f87171' },
+    { name: 'Venta Fuerte',  value: strongSell,  color: '#ef4444' },
+  ].filter(d => d.value > 0);
+
+  const buyTotal  = strongBuy + buy;
+  const sellTotal = sell + strongSell;
+  let consensoLabel = 'Mantener';
+  let consensoColor = '#f59e0b';
+  if (buyTotal > hold && buyTotal > sellTotal) {
+    consensoLabel = strongBuy >= buy ? 'Compra Fuerte' : 'Compra';
+    consensoColor = strongBuy >= buy ? '#22c55e' : '#86efac';
+  } else if (sellTotal > hold && sellTotal > buyTotal) {
+    consensoLabel = strongSell >= sell ? 'Venta Fuerte' : 'Venta';
+    consensoColor = strongSell >= sell ? '#ef4444' : '#f87171';
+  }
+
+  return (
+    <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '16px', marginBottom: '16px' }}>
+      <div className="label-xs" style={{ marginBottom: '16px' }}>
+        🎯 Recomendaciones de analistas {numAnalistas ? `(${numAnalistas})` : ''}
+      </div>
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Dona */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <PieChart width={130} height={130}>
+            <Pie data={segments} cx={60} cy={60} innerRadius={38} outerRadius={60} paddingAngle={2} dataKey="value" startAngle={90} endAngle={-270}>
+              {segments.map((s, i) => <Cell key={i} fill={s.color} stroke="transparent" />)}
+            </Pie>
+            <Tooltip
+              formatter={(value: number) => [`${value} (${((value / total) * 100).toFixed(0)}%)`, '']}
+              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}
+            />
+          </PieChart>
+          {/* Texto central */}
+          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '18px', fontWeight: 700, color: consensoColor, lineHeight: 1 }}>{total}</div>
+            <div style={{ fontSize: '9px', color: 'var(--muted)', marginTop: '2px' }}>total</div>
+          </div>
+        </div>
+
+        {/* Leyenda y consenso */}
+        <div style={{ flex: 1, minWidth: '140px' }}>
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '15px', color: consensoColor }}>{consensoLabel}</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>Consenso de analistas</div>
+          </div>
+          {segments.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
+              <div style={{ width: '10px', height: '10px', borderRadius: '3px', background: s.color, flexShrink: 0 }} />
+              <span style={{ fontSize: '12px', color: 'var(--text2)', flex: 1 }}>{s.name}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--text)', minWidth: '20px', textAlign: 'right' }}>{s.value}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: 'var(--muted)', minWidth: '34px', textAlign: 'right' }}>
+                {((s.value / total) * 100).toFixed(0)}%
+              </span>
+            </div>
+          ))}
+
+          {precioObjetivo != null && precio != null && (
+            <div style={{ marginTop: '10px', padding: '8px 10px', background: 'var(--surface)', borderRadius: '8px' }}>
+              <div className="label-xs" style={{ marginBottom: '4px' }}>Precio objetivo promedio</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>${precioObjetivo.toFixed(2)}</span>
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: precioObjetivo > precio ? 'var(--green)' : 'var(--red)' }}>
+                  {precioObjetivo > precio ? '+' : ''}{(((precioObjetivo - precio) / precio) * 100).toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Hook lazy fundamentals — solo dispara si faltan datos
+function useFundamentals(usTicker: string | null, sufixFundamentals: string, hasFundamentals = false) {
   const [funds, setFunds] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!usTicker) return;
+    if (!usTicker || hasFundamentals) return;
     setLoading(true);
     fetch(`/api/fundamentals?ticker=${encodeURIComponent(usTicker)}&suffix=${encodeURIComponent(sufixFundamentals)}`)
       .then(r => r.json())
       .then(data => { if (!data.error) setFunds(data); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [usTicker, sufixFundamentals]);
+  }, [usTicker, sufixFundamentals, hasFundamentals]);
 
   return { funds, loading };
 }
 
 function SearchResultRV({ r }: { r: any }) {
-  const { funds, loading } = useFundamentals(r.usTicker || null, r.sufixFundamentals || '.BA');
+  const hasFundamentals = r.marketCap != null || r.per != null || r.beta != null;
+  const { funds, loading } = useFundamentals(
+    hasFundamentals ? null : (r.usTicker || null),
+    r.sufixFundamentals || '',
+    hasFundamentals
+  );
   const recom = r.recomendacion ? RECOM[r.recomendacion] : null;
 
-  const marketCap = funds?.marketCap ?? r.marketCap ?? null;
-  const per = funds?.per ?? r.per ?? null;
-  const eps = funds?.eps ?? r.eps ?? null;
-  const beta = funds?.beta ?? r.beta ?? null;
-  const maximo52 = funds?.maximo52 ?? r.maximo52 ?? null;
-  const minimo52 = funds?.minimo52 ?? r.minimo52 ?? null;
+  const marketCap      = funds?.marketCap      ?? r.marketCap      ?? null;
+  const per            = funds?.per            ?? r.per            ?? null;
+  const eps            = funds?.eps            ?? r.eps            ?? null;
+  const beta           = funds?.beta           ?? r.beta           ?? null;
+  const maximo52       = funds?.maximo52       ?? r.maximo52       ?? null;
+  const minimo52       = funds?.minimo52       ?? r.minimo52       ?? null;
+  const strongBuy      = funds?.strongBuy      ?? r.strongBuy      ?? 0;
+  const buy            = funds?.buy            ?? r.buy            ?? 0;
+  const hold           = funds?.hold           ?? r.hold           ?? 0;
+  const sell           = funds?.sell           ?? r.sell           ?? 0;
+  const strongSell     = funds?.strongSell     ?? r.strongSell     ?? 0;
+  const numAnalistas   = funds?.numAnalistas   ?? r.numAnalistas   ?? null;
+  const precioObjetivo = funds?.precioObjetivo ?? r.precioObjetivo ?? null;
+  const hasAnalistas   = (strongBuy + buy + hold + sell + strongSell) > 0;
 
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
@@ -85,6 +185,7 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         </div>
       </div>
+
       <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '10px' }}>
           <div><div className="label-xs" style={{ marginBottom: '6px' }}>Rango del día</div><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>{fmtUSD(r.minimo)} — {fmtUSD(r.maximo)}</div></div>
@@ -97,17 +198,16 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         )}
       </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
         <StatBox label="Apertura" value={fmtUSD(r.apertura)} />
         <StatBox label="Cierre ant." value={fmtUSD(r.cierreAnterior)} />
         <StatBox label="Volumen" value={fmtM(r.volumen)} />
         <StatBox label="Vol. prom." value={fmtM(r.volumenPromedio)} />
       </div>
-      {loading && (
-        <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>
-          Cargando fundamentals...
-        </div>
-      )}
+
+      {loading && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>Cargando fundamentals...</div>}
+
       {(marketCap != null || per != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals</div>
@@ -123,6 +223,14 @@ function SearchResultRV({ r }: { r: any }) {
           </div>
         </>
       )}
+
+      {hasAnalistas && (
+        <AnalystChart
+          strongBuy={strongBuy} buy={buy} hold={hold} sell={sell} strongSell={strongSell}
+          precioObjetivo={precioObjetivo} precio={r.precio} numAnalistas={numAnalistas}
+        />
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
         {(r.dividendo != null || r.rendDividendo != null) && (
           <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px' }}>
@@ -132,19 +240,13 @@ function SearchResultRV({ r }: { r: any }) {
             {r.fechaExDividendo && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Ex-dividendo</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--text2)' }}>{r.fechaExDividendo}</span></div>}
           </div>
         )}
-        {(r.precioObjetivo != null || r.recomendacion) && (
+        {recom && (
           <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px' }}>
-            <div className="label-xs" style={{ marginBottom: '10px' }}>🎯 Analistas {r.numAnalistas ? `(${r.numAnalistas})` : ''}</div>
-            {recom && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Consenso</span><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: recom.color }}>{recom.label}</span></div>}
-            {r.precioObjetivo != null && (
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Precio objetivo</span>
-                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>
-                  {fmtUSD(r.precioObjetivo)}
-                  {r.precio != null && <span style={{ color: r.precioObjetivo > r.precio ? 'var(--green)' : 'var(--red)', marginLeft: '6px', fontSize: '11px' }}>({r.precioObjetivo > r.precio ? '+' : ''}{(((r.precioObjetivo - r.precio) / r.precio) * 100).toFixed(1)}%)</span>}
-                </span>
-              </div>
-            )}
+            <div className="label-xs" style={{ marginBottom: '10px' }}>🎯 Consenso {r.numAnalistas ? `(${r.numAnalistas})` : ''}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Consenso</span>
+              <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: recom.color }}>{recom.label}</span>
+            </div>
           </div>
         )}
       </div>
@@ -153,17 +255,30 @@ function SearchResultRV({ r }: { r: any }) {
 }
 
 function SearchResultCedear({ r }: { r: any }) {
-  const { funds, loading } = useFundamentals(r.usTicker || null, r.sufixFundamentals ?? '');
+  const hasFundamentals = r.marketCap != null || r.per != null || r.beta != null;
+  const { funds, loading } = useFundamentals(
+    hasFundamentals ? null : (r.usTicker || null),
+    r.sufixFundamentals ?? '',
+    hasFundamentals
+  );
   const precio = r.precio || {};
   const esUSD = precio.moneda === 'USD';
   const fmtPrecio = (n: number | null) => n == null ? '—' : esUSD ? fmtUSD(n) : fmtARS(n);
 
-  const marketCap = funds?.marketCap ?? r.marketCap ?? null;
-  const per = funds?.per ?? r.per ?? null;
-  const eps = funds?.eps ?? r.eps ?? null;
-  const beta = funds?.beta ?? r.beta ?? null;
-  const maximo52 = funds?.maximo52 ?? r.maximo52 ?? null;
-  const minimo52 = funds?.minimo52 ?? r.minimo52 ?? null;
+  const marketCap      = funds?.marketCap      ?? r.marketCap      ?? null;
+  const per            = funds?.per            ?? r.per            ?? null;
+  const eps            = funds?.eps            ?? r.eps            ?? null;
+  const beta           = funds?.beta           ?? r.beta           ?? null;
+  const maximo52       = funds?.maximo52       ?? r.maximo52       ?? null;
+  const minimo52       = funds?.minimo52       ?? r.minimo52       ?? null;
+  const strongBuy      = funds?.strongBuy      ?? r.strongBuy      ?? 0;
+  const buy            = funds?.buy            ?? r.buy            ?? 0;
+  const hold           = funds?.hold           ?? r.hold           ?? 0;
+  const sell           = funds?.sell           ?? r.sell           ?? 0;
+  const strongSell     = funds?.strongSell     ?? r.strongSell     ?? 0;
+  const numAnalistas   = funds?.numAnalistas   ?? r.numAnalistas   ?? null;
+  const precioObjetivo = funds?.precioObjetivo ?? r.precioObjetivo ?? null;
+  const hasAnalistas   = (strongBuy + buy + hold + sell + strongSell) > 0;
 
   return (
     <div className="card fade-in" style={{ borderColor: 'rgba(124,58,237,0.4)' }}>
@@ -183,17 +298,16 @@ function SearchResultCedear({ r }: { r: any }) {
           {precio.variacion != null && <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '16px', color: colorV(precio.variacion), marginTop: '4px' }}>{fmtPct(precio.variacion)}</div>}
         </div>
       </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
         <StatBox label="Apertura" value={fmtPrecio(precio.apertura ?? null)} />
         <StatBox label="Máximo" value={fmtPrecio(precio.maximo ?? null)} />
         <StatBox label="Mínimo" value={fmtPrecio(precio.minimo ?? null)} />
         <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior ?? null)} />
       </div>
-      {loading && (
-        <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>
-          Cargando fundamentals...
-        </div>
-      )}
+
+      {loading && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '12px' }}>Cargando fundamentals...</div>}
+
       {(maximo52 != null || minimo52 != null) && (
         <div style={{ background: 'var(--surface2)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
           <div style={{ marginBottom: '10px' }}>
@@ -208,16 +322,24 @@ function SearchResultCedear({ r }: { r: any }) {
           )}
         </div>
       )}
+
       {(marketCap != null || per != null || beta != null) && (
         <>
           <div className="label-xs" style={{ marginBottom: '10px' }}>📊 Fundamentals (subyacente US)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
             {marketCap != null && <StatBox label="Market Cap" value={fmtM(marketCap)} />}
             {per != null && <StatBox label="P/E" value={fmtNum(per)} />}
             {eps != null && <StatBox label="EPS" value={fmtUSD(eps)} />}
             {beta != null && <StatBox label="Beta" value={fmtNum(beta)} />}
           </div>
         </>
+      )}
+
+      {hasAnalistas && (
+        <AnalystChart
+          strongBuy={strongBuy} buy={buy} hold={hold} sell={sell} strongSell={strongSell}
+          precioObjetivo={precioObjetivo} precio={precio.valor} numAnalistas={numAnalistas}
+        />
       )}
     </div>
   );
@@ -255,15 +377,15 @@ function SearchResultRF({ r }: { r: any }) {
     const flujos = r.analytics.flujos.map((f: any, i: number) => ({
       ...f, n: i + 1,
       interesT: +(f.interes * factor * convFactor).toFixed(2),
-      amortT: +(f.amortizacion * factor * convFactor).toFixed(2),
-      totalT: +(f.total * factor * convFactor).toFixed(2),
+      amortT:   +(f.amortizacion * factor * convFactor).toFixed(2),
+      totalT:   +(f.total * factor * convFactor).toFixed(2),
     }));
     const totalCobros = +flujos.reduce((s: number, f: any) => s + f.totalT, 0).toFixed(2);
     setSimResult({ vn, inversion, flujos, totalCobros, ganancia: +(totalCobros - inversion).toFixed(2) });
   };
 
-  const precio = r.precio || {};
-  const spec = r.spec || {};
+  const precio   = r.precio   || {};
+  const spec     = r.spec     || {};
   const analytics = r.analytics;
 
   return (
@@ -274,7 +396,6 @@ function SearchResultRF({ r }: { r: any }) {
             <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: '22px', color: 'var(--text)' }}>{r.ticker}</span>
             <Badge label={esUSD ? '💵 USD · Seg. D' : '🇦🇷 ARS · Seg. 48hs'} color={esUSD ? 'var(--blue)' : 'var(--green)'} />
             {spec.ley && <Badge label={spec.ley === 'nueva_york' ? 'NY Law' : 'Ley Arg.'} color="var(--violet-light)" />}
-            {spec.tipoBono && <Badge label={spec.tipoBono === 'soberano' ? 'Soberano' : spec.tipoBono === 'provincial' ? 'Provincial' : 'ON'} color="var(--amber)" />}
             {spec.sector && <Badge label={spec.sector} color="var(--muted2)" />}
             {r.fuente && <Badge label={r.fuente} color="var(--muted)" />}
           </div>
@@ -292,21 +413,21 @@ function SearchResultRF({ r }: { r: any }) {
       {analytics && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '10px' }}>
-            <StatBox label="TIR (TEA)" value={analytics.tir != null ? `${analytics.tir.toFixed(2)}%` : '—'} color="var(--green)" />
+            <StatBox label="TIR (TEA)"    value={analytics.tir        != null ? `${analytics.tir.toFixed(2)}%`        : '—'} color="var(--green)" />
             <StatBox label="Duration Mod." value={analytics.durationMod != null ? `${analytics.durationMod.toFixed(2)} años` : '—'} />
-            <StatBox label="Paridad" value={analytics.paridad != null ? `${analytics.paridad.toFixed(2)}%` : '—'} />
-            <StatBox label="PVBP" value={analytics.pvbp != null ? `$${analytics.pvbp.toFixed(4)}` : '—'} sub="por 1bp" />
+            <StatBox label="Paridad"      value={analytics.paridad     != null ? `${analytics.paridad.toFixed(2)}%`     : '—'} />
+            <StatBox label="PVBP"         value={analytics.pvbp        != null ? `$${analytics.pvbp.toFixed(4)}`        : '—'} sub="por 1bp" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
-            <StatBox label="Precio Dirty" value={analytics.precioDirty != null ? `$${analytics.precioDirty.toFixed(4)}` : '—'} />
-            <StatBox label="Precio Clean" value={analytics.precioClean != null ? `$${analytics.precioClean.toFixed(4)}` : '—'} />
+            <StatBox label="Precio Dirty"    value={analytics.precioDirty    != null ? `$${analytics.precioDirty.toFixed(4)}`    : '—'} />
+            <StatBox label="Precio Clean"    value={analytics.precioClean    != null ? `$${analytics.precioClean.toFixed(4)}`    : '—'} />
             <StatBox label="Interés corrido" value={analytics.interesCorreido != null ? `$${analytics.interesCorreido.toFixed(4)}` : '—'} />
-            <StatBox label="Tasa cupón" value={spec.tasaCupon != null ? `${spec.tasaCupon}%` : '—'} />
+            <StatBox label="Tasa cupón"      value={spec.tasaCupon           != null ? `${spec.tasaCupon}%`                      : '—'} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
-            <StatBox label="Apertura" value={fmtPrecio(precio.apertura)} />
-            <StatBox label="Máximo" value={fmtPrecio(precio.maximo)} />
-            <StatBox label="Mínimo" value={fmtPrecio(precio.minimo)} />
+            <StatBox label="Apertura"    value={fmtPrecio(precio.apertura)} />
+            <StatBox label="Máximo"      value={fmtPrecio(precio.maximo)} />
+            <StatBox label="Mínimo"      value={fmtPrecio(precio.minimo)} />
             <StatBox label="Cierre ant." value={fmtPrecio(precio.cierreAnterior)} />
           </div>
 
@@ -391,7 +512,7 @@ function SearchResultRF({ r }: { r: any }) {
                 {simResult && (
                   <div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
-                      <StatBox label="VN Comprado" value={`USD ${simResult.vn.toLocaleString('es-AR')}`} />
+                      <StatBox label="VN Comprado"                         value={`USD ${simResult.vn.toLocaleString('es-AR')}`} />
                       <StatBox label={esUSD ? 'Inversión (USD)' : 'Inversión (ARS)'} value={fmtPrecio(simResult.inversion)} color="var(--amber)" />
                       <StatBox label={esUSD ? 'Total cobros (USD)' : 'Total cobros (ARS)'} value={fmtPrecio(simResult.totalCobros)} color="var(--green)" />
                       <StatBox label={esUSD ? 'Ganancia neta (USD)' : 'Ganancia neta (ARS)'} value={`${simResult.ganancia >= 0 ? '+' : ''}${fmtPrecio(simResult.ganancia)}`} color={simResult.ganancia >= 0 ? 'var(--green)' : 'var(--red)'} />
@@ -466,8 +587,8 @@ export default function MercadoPage() {
       const [mRes, dRes] = await Promise.all([fetch('/api/mercado'), fetch('/api/dolar')]);
       const [m, d] = await Promise.all([mRes.json(), dRes.json()]);
       if (m.acciones) setAcciones(m.acciones);
-      if (m.bonos) setBonos(m.bonos);
-      if (m.cedears) setCedears(m.cedears);
+      if (m.bonos)    setBonos(m.bonos);
+      if (m.cedears)  setCedears(m.cedears);
       if (Array.isArray(d)) setDolar(d);
       setLastUpdate(new Date());
     } catch (e) { console.error(e); }
@@ -476,7 +597,7 @@ export default function MercadoPage() {
 
   useEffect(() => {
     fetchAll();
-    fetch('/api/quotes?tickers=AAPL&suffix=').catch(() => {});
+    fetch('/api/fundamentals?ticker=AAPL&suffix=').catch(() => {});
   }, [fetchAll]);
 
   const handleSearch = async () => {
@@ -490,7 +611,7 @@ export default function MercadoPage() {
   };
 
   const hotMovers = [...acciones].filter(a => a.variacion != null).sort((a, b) => Math.abs(b.variacion!) - Math.abs(a.variacion!)).slice(0, 4);
-  const dolarP = dolar.filter(d => ['oficial', 'blue', 'bolsa', 'contadoconliqui'].includes(d.casa));
+  const dolarP    = dolar.filter(d => ['oficial', 'blue', 'bolsa', 'contadoconliqui'].includes(d.casa));
   const timeSince = lastUpdate ? Math.floor((Date.now() - lastUpdate.getTime()) / 1000) : null;
 
   return (
