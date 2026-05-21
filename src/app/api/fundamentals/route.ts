@@ -14,7 +14,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const controller = new AbortController();
-    // 9s: cubre cold start GAS (2-4s) + GOOGLEFINANCE sleep (2.5s) + overhead
     const timer = setTimeout(() => controller.abort(), 9000);
     const url = `${process.env.APPS_SCRIPT_URL}?action=details&ticker=${encodeURIComponent(usTicker)}&suffix=${encodeURIComponent(suffix)}`;
     const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
@@ -23,13 +22,21 @@ export async function GET(request: NextRequest) {
 
     if (data?.precio != null && !data.error) {
       return NextResponse.json({
-        nombre: data.nombre ?? null,
-        marketCap: data.marketCap ?? null,
-        per: data.per ?? null,
-        eps: data.eps ?? null,
-        beta: data.beta ?? null,
-        maximo52: data.maximo52 ?? null,
-        minimo52: data.minimo52 ?? null,
+        nombre:         data.nombre        ?? null,
+        marketCap:      data.marketCap     ?? null,
+        per:            data.per           ?? null,
+        eps:            data.eps           ?? null,
+        beta:           data.beta          ?? null,
+        maximo52:       data.maximo52      ?? null,
+        minimo52:       data.minimo52      ?? null,
+        // Analistas
+        strongBuy:      data.strongBuy     ?? null,
+        buy:            data.buy           ?? null,
+        hold:           data.hold          ?? null,
+        sell:           data.sell          ?? null,
+        strongSell:     data.strongSell    ?? null,
+        numAnalistas:   data.numAnalistas  ?? null,
+        precioObjetivo: data.precioObjetivo ?? null,
       });
     }
   } catch {}
