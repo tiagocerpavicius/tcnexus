@@ -9,54 +9,64 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Tickers requeridos' }, { status: 400 });
     }
 
-    // Armar contexto con los datos de cada ticker
     const contexto = tickers.map((t: any) => {
       const lineas = [
         `Ticker: ${t.ticker}`,
-        t.nombre ? `Nombre: ${t.nombre}` : null,
-        t.precio != null ? `Precio actual: ${t.precio}` : null,
+        t.nombre ? `Empresa: ${t.nombre}` : null,
+        t.precio != null ? `Precio actual: $${t.precio}` : null,
         t.variacion != null ? `Variación diaria: ${t.variacion.toFixed(2)}%` : null,
         t.varMensual != null ? `Variación mensual: ${t.varMensual.toFixed(2)}%` : null,
         t.varAnual != null ? `Variación anual: ${t.varAnual.toFixed(2)}%` : null,
-        t.marketCap != null ? `Market Cap: ${t.marketCap}` : null,
-        t.per != null ? `P/E Ratio: ${t.per}` : null,
-        t.eps != null ? `EPS: ${t.eps}` : null,
-        t.beta != null ? `Beta: ${t.beta}` : null,
-        t.maximo52 != null ? `Máximo 52 semanas: ${t.maximo52}` : null,
-        t.minimo52 != null ? `Mínimo 52 semanas: ${t.minimo52}` : null,
-        t.numAnalistas != null ? `Analistas: ${t.numAnalistas} (strongBuy:${t.strongBuy} buy:${t.buy} hold:${t.hold} sell:${t.sell})` : null,
+        t.marketCap != null ? `Capitalización bursátil: ${t.marketCap > 1e12 ? (t.marketCap/1e12).toFixed(2)+'T' : t.marketCap > 1e9 ? (t.marketCap/1e9).toFixed(2)+'B' : (t.marketCap/1e6).toFixed(2)+'M'} USD` : null,
+        t.per != null ? `P/E Ratio: ${t.per.toFixed(2)}` : null,
+        t.eps != null ? `EPS: $${t.eps.toFixed(2)}` : null,
+        t.beta != null ? `Beta: ${t.beta.toFixed(2)}` : null,
+        t.numAnalistas != null ? `Cobertura de analistas: ${t.numAnalistas} analistas (Compra fuerte: ${t.strongBuy}, Compra: ${t.buy}, Mantener: ${t.hold}, Venta: ${t.sell}, Venta fuerte: ${t.strongSell})` : null,
       ].filter(Boolean).join('\n');
       return lineas;
     }).join('\n\n---\n\n');
 
-    const prompt = `Sos un analista financiero experto en mercados argentinos y globales. 
-Analizá los siguientes activos y generá un resumen ejecutivo en español para un asesor de Wealth Management.
+    const prompt = `Sos un analista financiero senior especializado en mercados globales y argentinos, con amplio conocimiento de empresas listadas en NYSE, NASDAQ y BCBA. Trabajás para un equipo de Wealth Management de alto nivel.
 
-DATOS DE LOS ACTIVOS:
+Tu tarea es generar un análisis profesional y detallado de los siguientes activos. Para cada empresa, usá tu conocimiento sobre el negocio, industria, posicionamiento competitivo y contexto macroeconómico actual.
+
+DATOS DE MERCADO:
 ${contexto}
 
-Respondé ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdown, sin explicaciones fuera del JSON):
+Respondé ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdown ni texto fuera del JSON):
 {
-  "resumen_general": "párrafo corto describiendo el conjunto de activos seleccionados",
+  "resumen_general": "Párrafo de 3-4 oraciones describiendo el conjunto de activos, el contexto de mercado actual y qué tipo de cartera representan",
+  "analisis_empresas": [
+    {
+      "ticker": "XXX",
+      "descripcion": "2-3 oraciones describiendo el negocio principal de la empresa, su modelo de ingresos y posición en la industria",
+      "drivers": "1-2 oraciones sobre los principales catalizadores de crecimiento o riesgo actuales",
+      "tesis": "1-2 oraciones con la tesis de inversión resumida"
+    }
+  ],
   "activo_destacado": {
-    "ticker": "el ticker más interesante",
-    "razon": "por qué destaca en 1-2 oraciones"
+    "ticker": "el ticker más interesante del grupo",
+    "razon": "2-3 oraciones explicando por qué destaca, qué lo diferencia de los otros activos del grupo"
   },
   "insights": [
-    "insight 1 concreto y accionable",
-    "insight 2 concreto y accionable",
-    "insight 3 concreto y accionable"
+    "Insight 1: concreto, accionable y relevante para un asesor financiero",
+    "Insight 2: puede ser sobre correlaciones entre activos, riesgos sectoriales o oportunidades",
+    "Insight 3: enfocado en gestión de riesgo o diversificación del grupo"
   ],
   "ranking": [
-    { "ticker": "XXX", "puntos": 85, "etiqueta": "Compra Fuerte" },
-    { "ticker": "YYY", "puntos": 62, "etiqueta": "Mantener" }
+    { "ticker": "XXX", "puntos": 85, "etiqueta": "Compra Fuerte" }
   ],
   "riesgo_general": "Bajo | Moderado | Alto",
   "sesgo_mercado": "Alcista | Neutral | Bajista"
 }
 
-El ranking debe incluir todos los tickers ordenados de mejor a peor según tu análisis (puntos de 0 a 100).
-Etiquetas posibles: "Compra Fuerte", "Compra", "Mantener", "Reducir", "Venta".`;
+Reglas importantes:
+- El análisis_empresas debe incluir TODOS los tickers analizados
+- El ranking debe incluir TODOS los tickers ordenados de mejor a peor (puntos de 0 a 100)
+- Etiquetas del ranking: "Compra Fuerte", "Compra", "Mantener", "Reducir", "Venta"
+- Usá tu conocimiento actualizado sobre cada empresa más allá de los datos provistos
+- El tono debe ser profesional pero accesible para clientes de alto patrimonio
+- Priorizá información práctica y accionable`;
 
     const response = await fetch(GROQ_API, {
       method: 'POST',
@@ -67,8 +77,8 @@ Etiquetas posibles: "Compra Fuerte", "Compra", "Mantener", "Reducir", "Venta".`;
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 1000,
+        temperature: 0.4,
+        max_tokens: 2000,
       }),
     });
 
@@ -80,8 +90,6 @@ Etiquetas posibles: "Compra Fuerte", "Compra", "Mantener", "Reducir", "Venta".`;
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
-
-    // Parsear JSON de la respuesta
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return NextResponse.json({ error: 'Invalid AI response' }, { status: 500 });
 
