@@ -704,10 +704,13 @@ export default function PortfolioPage() {
           mep={mep}
           onClose={() => setShowModal(false)}
           onSave={async (op) => {
-            await supabase.from('operaciones').insert(op);
-            setShowModal(false);
-            await loadData(true);
-          }}
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) { alert('Error: sesión expirada. Volvé a iniciar sesión.'); return; }
+  const { error } = await supabase.from('operaciones').insert({ ...op, user_id: user.id });
+  if (error) { console.error('Error al guardar:', error.message); alert('Error: ' + error.message); return; }
+  setShowModal(false);
+  await loadData(true);
+}}
         />
       )}
     </div>
