@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown } from 'lucide-react';
-import { PieChart, Pie, Cell, Tooltip, Treemap, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import { supabase } from '@/lib/supabase';
 
 interface Operacion {
@@ -59,7 +59,10 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
     }
     const pos = map.get(op.ticker)!;
     if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
-    else if (op.tipo === 'venta' && pos.cantidad > 0) { const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1); pos.costoTotalUSD *= (1 - pct); pos.cantidad -= (op.cantidad || 0); }
+    else if (op.tipo === 'venta' && pos.cantidad > 0) {
+      const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
+      pos.costoTotalUSD *= (1 - pct); pos.cantidad -= (op.cantidad || 0);
+    }
   }
   Array.from(map.keys()).forEach(k => { if (map.get(k)!.cantidad <= 0.000001) map.delete(k); });
   return map;
@@ -115,24 +118,6 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
   );
 }
 
-// Treemap content definido FUERA del componente para evitar crash
-function TreemapContent(props: any) {
-  const { x, y, width, height, name, pnlPct } = props;
-  if (!x || !y || !width || !height || width < 2 || height < 2) return null;
-  const pct = typeof pnlPct === 'number' ? pnlPct : 0;
-  return (
-    <g>
-      <rect x={x + 1} y={y + 1} width={Math.max(0, width - 2)} height={Math.max(0, height - 2)} fill={pnlColor(pct)} rx={6} />
-      {width > 50 && height > 40 && (
-        <>
-          <text x={x + width / 2} y={y + height / 2 - (height > 70 ? 10 : 0)} textAnchor="middle" fill="#fff" fontSize={Math.min(15, Math.max(10, width / 5))} fontWeight={700} fontFamily="Syne, sans-serif">{name || ''}</text>
-          {height > 60 && <text x={x + width / 2} y={y + height / 2 + 14} textAnchor="middle" fill="rgba(255,255,255,0.85)" fontSize={Math.min(12, Math.max(9, width / 6))} fontFamily="DM Mono, monospace">{(pct >= 0 ? '+' : '') + pct.toFixed(1)}%</text>}
-        </>
-      )}
-    </g>
-  );
-}
-
 function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionCompleta[]; efectivoUSD: number }) {
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
@@ -158,7 +143,12 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
                   {p.nombre !== p.ticker && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div><div style={{ color: 'var(--text)' }}>{p.precioActual != null ? (p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual)) : '—'}</div><div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div></div>}
+                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : (
+                    <div>
+                      <div style={{ color: 'var(--text)' }}>{p.precioActual != null ? (p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual)) : '—'}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div>
+                    </div>
+                  )}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtUSD(p.costoPromedioUSD)}</td>
@@ -204,9 +194,31 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
 function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
   const data = posiciones
     .filter(p => p.valorActualUSD != null && p.valorActualUSD > 0)
-    .map(p => ({ name: p.ticker, value: Math.round(p.valorActualUSD!), pnlPct: p.pnlPct ?? 0 }));
+    .map(p => ({ name: p.ticker, value: p.valorActualUSD!, pnlPct: p.pnlPct ?? 0 }))
+    .sort((a, b) => b.value - a.value);
 
-  if (!data.length) return <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>No hay posiciones con valor calculado.</div>;
+  if (!data.length) return (
+    <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>
+      No hay posiciones con valor calculado.
+    </div>
+  );
+
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const mitad = Math.ceil(data.length / 2);
+  const row1 = data.slice(0, mitad);
+  const row2 = data.slice(mitad);
+  const row1Pct = total > 0 ? (row1.reduce((s, d) => s + d.value, 0) / total) * 100 : 60;
+
+  const renderItem = (d: { name: string; value: number; pnlPct: number }) => {
+    const pct = (d.value / total) * 100;
+    return (
+      <div key={d.name} style={{ flex: `${d.value} 0 0`, background: pnlColor(d.pnlPct), borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '8px', minWidth: '40px', overflow: 'hidden' }}>
+        <span style={{ color: '#fff', fontWeight: 700, fontFamily: 'Syne, sans-serif', fontSize: `${Math.min(16, Math.max(9, pct * 0.9))}px`, textAlign: 'center' }}>{d.name}</span>
+        {pct > 4 && <span style={{ color: 'rgba(255,255,255,0.85)', fontFamily: 'DM Mono, monospace', fontSize: `${Math.min(12, Math.max(8, pct * 0.7))}px`, marginTop: '4px' }}>{d.pnlPct >= 0 ? '+' : ''}{d.pnlPct.toFixed(1)}%</span>}
+        {pct > 10 && <span style={{ color: 'rgba(255,255,255,0.55)', fontFamily: 'DM Mono, monospace', fontSize: '10px', marginTop: '2px' }}>{fmtUSD(d.value)}</span>}
+      </div>
+    );
+  };
 
   return (
     <div className="card">
@@ -222,9 +234,10 @@ function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
           </div>
         ))}
       </div>
-      <ResponsiveContainer width="100%" height={380}>
-        <Treemap data={data} dataKey="value" aspectRatio={16 / 9} content={<TreemapContent />} />
-      </ResponsiveContainer>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', height: '340px' }}>
+        <div style={{ display: 'flex', gap: '4px', flex: row1Pct }}>{row1.map(d => renderItem(d))}</div>
+        {row2.length > 0 && <div style={{ display: 'flex', gap: '4px', flex: 100 - row1Pct }}>{row2.map(d => renderItem(d))}</div>}
+      </div>
     </div>
   );
 }
@@ -267,7 +280,7 @@ function TabRiesgo({ posiciones, valorTotalUSD }: { posiciones: PosicionCompleta
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
       <div className="card">
         <div className="label-xs" style={{ marginBottom: '16px' }}>🏭 Exposición sectorial</div>
-        {bySector.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '13px' }}>Agregá sectores a tus operaciones para ver la exposición.</div>}
+        {bySector.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '13px' }}>Agregá operaciones con sector para ver la exposición.</div>}
         {bySector.map((s, i) => {
           const pct = valorTotalUSD > 0 ? (s.value / valorTotalUSD) * 100 : 0;
           return (
@@ -363,6 +376,7 @@ function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; o
 function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => void; onSave: (op: any) => Promise<void> }) {
   const [tipo, setTipo] = useState<'compra' | 'venta' | 'dividendo'>('compra');
   const [ticker, setTicker] = useState('');
+  const [nombre, setNombre] = useState('');
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [cantidad, setCantidad] = useState('');
   const [precioUnitario, setPrecioUnitario] = useState('');
@@ -373,14 +387,35 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
   const [notas, setNotas] = useState('');
   const [montoDirecto, setMontoDirecto] = useState('');
   const [saving, setSaving] = useState(false);
+  const [loadingSector, setLoadingSector] = useState(false);
+  const [sectorDetectado, setSectorDetectado] = useState(false);
 
   const esDividendo = tipo === 'dividendo';
+
+  useEffect(() => {
+    if (!ticker || ticker.length < 2) { setSectorDetectado(false); return; }
+    const timer = setTimeout(async () => {
+      setLoadingSector(true);
+      try {
+        const res = await fetch(`/api/perfil?ticker=${ticker}`);
+        const data = await res.json();
+        if (!data.error) {
+          if (data.sector) { setSector(data.sector); setSectorDetectado(true); }
+          if (data.nombre && !nombre) setNombre(data.nombre);
+        } else { setSectorDetectado(false); }
+      } catch { setSectorDetectado(false); }
+      setLoadingSector(false);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [ticker]);
+
   const calcMontoUSD = () => {
     if (esDividendo) { const m = parseFloat(montoDirecto); return isNaN(m) ? 0 : moneda === 'ARS' ? m / mep : m; }
     const q = parseFloat(cantidad), p = parseFloat(precioUnitario);
     if (isNaN(q) || isNaN(p)) return 0;
     return moneda === 'ARS' ? (q * p) / mep : q * p;
   };
+
   const montoUSDPreview = calcMontoUSD();
   const canSave = esDividendo ? parseFloat(montoDirecto) > 0 : ticker.trim() && parseFloat(cantidad) > 0 && parseFloat(precioUnitario) > 0;
 
@@ -389,7 +424,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
     if (monto_usd <= 0) return;
     setSaving(true);
     await onSave({
-      fecha, ticker: ticker.toUpperCase().trim(), nombre: ticker.toUpperCase().trim(), tipo,
+      fecha, ticker: ticker.toUpperCase().trim(), nombre: nombre || ticker.toUpperCase().trim(), tipo,
       cantidad: esDividendo ? null : parseFloat(cantidad) || null,
       precio_unitario: esDividendo ? null : parseFloat(precioUnitario) || null,
       monto_usd, moneda, tipo_activo: tipoActivo, sector, broker: broker || null, notas: notas || null,
@@ -411,7 +446,10 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           <div className="label-xs" style={ls}>Tipo de operación</div>
           <div style={{ display: 'flex', gap: '6px' }}>
             {[{ key: 'compra', label: '🛒 Compra' },{ key: 'venta', label: '💸 Venta' },{ key: 'dividendo', label: '🎁 Dividendo' }].map(t => (
-              <button key={t.key} onClick={() => setTipo(t.key as any)} style={{ background: tipo === t.key ? 'var(--violet)' : 'var(--surface2)', color: tipo === t.key ? '#fff' : 'var(--text2)', border: `1px solid ${tipo === t.key ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>{t.label}</button>
+              <button key={t.key} onClick={() => setTipo(t.key as any)}
+                style={{ background: tipo === t.key ? 'var(--violet)' : 'var(--surface2)', color: tipo === t.key ? '#fff' : 'var(--text2)', border: `1px solid ${tipo === t.key ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
+                {t.label}
+              </button>
             ))}
           </div>
         </div>
@@ -423,8 +461,15 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
             <div className="label-xs" style={ls}>Ticker</div>
-            <input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} />
+            <div style={{ position: 'relative' }}>
+              <input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..."
+                value={ticker} onChange={e => { setTicker(e.target.value.toUpperCase()); setSectorDetectado(false); }}
+                style={{ paddingRight: loadingSector ? '36px' : undefined }} />
+              {loadingSector && <div style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '14px', height: '14px', border: '2px solid var(--violet)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />}
+            </div>
+            {sectorDetectado && <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--green)', fontFamily: 'DM Mono, monospace' }}>✓ Sector detectado automáticamente</div>}
           </div>
+
           {!esDividendo ? (
             <>
               <div>
@@ -448,7 +493,11 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
                 </select>
               </div>
               <div>
-                <div className="label-xs" style={ls}>Sector</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <span className="label-xs" style={{ margin: 0 }}>Sector</span>
+                  {loadingSector && <span style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>detectando...</span>}
+                  {sectorDetectado && <span style={{ fontSize: '10px', color: 'var(--green)', fontFamily: 'DM Mono, monospace' }}>✓ auto</span>}
+                </div>
                 <select className="input-field" value={sector} onChange={e => setSector(e.target.value)} style={{ cursor: 'pointer' }}>
                   {SECTORES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
@@ -460,11 +509,13 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
               <input className="input-field" type="number" placeholder="0.00" value={montoDirecto} onChange={e => setMontoDirecto(e.target.value)} min="0" step="any" />
             </div>
           )}
+
           <div>
             <div className="label-xs" style={ls}>Moneda</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               {['USD','ARS'].map(m => (
-                <button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>
+                <button key={m} onClick={() => setMoneda(m as any)}
+                  style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>
               ))}
             </div>
           </div>
@@ -648,7 +699,8 @@ export default function PortfolioPage() {
               { key: 'riesgo' as Tab, label: 'Exposición', icon: '🏭' },
               { key: 'operaciones' as Tab, label: 'Operaciones', icon: '📝' },
             ].map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
+              <button key={t.key} onClick={() => setTab(t.key)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
                 <span>{t.icon}</span> {t.label}
               </button>
             ))}
