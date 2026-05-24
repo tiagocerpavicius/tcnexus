@@ -103,7 +103,7 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
       pos.cantidad -= (op.cantidad || 0);
     }
   }
-  for (const [k, p] of map.entries()) { if (p.cantidad <= 0.000001) map.delete(k); }
+  Array.from(map.keys()).forEach(k => { if (map.get(k)!.cantidad <= 0.000001) map.delete(k); });
   return map;
 }
 
