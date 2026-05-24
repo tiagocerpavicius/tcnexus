@@ -439,6 +439,21 @@ function TabIA({ items }: { items: TickerItem[] }) {
         )}
       </div>
 
+      {/* Análisis por empresa */}
+{result.analisis_empresas?.length > 0 && (
+  <div className="card" style={{ marginBottom: '16px' }}>
+    <div className="label-xs" style={{ marginBottom: '16px' }}>🏢 Análisis por empresa</div>
+    {result.analisis_empresas.map((e: any, i: number) => (
+      <div key={e.ticker} style={{ marginBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', paddingBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', borderBottom: i < result.analisis_empresas.length-1 ? '1px solid var(--border)' : 'none' }}>
+        <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: COLORS[items.findIndex(t => t.ticker === e.ticker) % COLORS.length], marginBottom: '6px' }}>{e.ticker}</div>
+        {e.descripcion && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '6px' }}>{e.descripcion}</div>}
+        {e.drivers && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '4px' }}><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Drivers: </span>{e.drivers}</div>}
+        {e.tesis && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>Tesis: </span>{e.tesis}</div>}
+      </div>
+    ))}
+  </div>
+)}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>💡 Insights clave</div>
