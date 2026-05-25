@@ -361,7 +361,7 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
         const firstCompra = operaciones.filter(o => o.tipo === 'compra').sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
         const startDate = firstCompra?.fecha || '';
-        const sortedDates = [...allDates].sort().filter(d => d >= startDate);
+        const sortedDates = Array.from(allDates).sort().filter(d => d >= startDate);
 
         const puntos = sortedDates.map(fecha => {
           const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
