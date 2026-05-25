@@ -267,7 +267,7 @@ function TabPerformance({ posiciones }: { posiciones: PosicionCompleta[] }) {
   );
 }
 
-function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: number }) {
+function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Operacion[]; mep: number; valorActualIol: number }) {
   const [datos, setDatos] = useState<{ fecha: string; valor: number; invertido: number; rendimiento: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -293,7 +293,6 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
 
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
 
-        // Precio base de cada ticker en la fecha de su primera compra
         const basePrices: Record<string, number> = {};
         for (const ticker of tickers) {
           const h = historicos[ticker];
@@ -305,7 +304,6 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
         }
 
         const primeraFecha = compras.sort((a, b) => a.fecha.localeCompare(b.fecha))[0].fecha;
-
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
         const sortedDates = Array.from(allDates).sort().filter(d => d >= primeraFecha);
@@ -330,17 +328,29 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           return { fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento };
         }).filter(p => p.valor > 0);
 
-        // Punto cero un día antes de la primera compra → ambas curvas arrancan desde 0
+        // Anclar el último punto al valor real de IOL y escalar toda la curva proporcionalmente
+        if (puntos.length > 0 && valorActualIol > 0) {
+          const ultimoValor = puntos[puntos.length - 1].valor;
+          if (ultimoValor > 0) {
+            const factor = valorActualIol / ultimoValor;
+            puntos.forEach(p => {
+              p.valor = Math.round(p.valor * factor * 100) / 100;
+              p.rendimiento = p.invertido > 0 ? +((p.valor - p.invertido) / p.invertido * 100).toFixed(2) : 0;
+            });
+          }
+        }
+
+        // Punto cero un día antes de la primera compra
         const diaAntes = new Date(primeraFecha + 'T12:00:00');
         diaAntes.setDate(diaAntes.getDate() - 1);
         const zeroPt = { fecha: diaAntes.toISOString().split('T')[0], valor: 0, invertido: 0, rendimiento: 0 };
-
         setDatos([zeroPt, ...puntos]);
+
       } catch { setError('Error al cargar los datos históricos.'); }
       setLoading(false);
     };
     build();
-  }, [operaciones, mep]);
+  }, [operaciones, mep, valorActualIol]);
 
   if (loading) return (
     <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
@@ -358,7 +368,6 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
   const fin = datos[datos.length - 1];
   const rendimientoActual = fin.rendimiento;
-  // Variación desde primera compra real (ignoramos el punto cero)
   const primerPuntoReal = datos.find(p => p.valor > 0);
   const variacionCapital = primerPuntoReal && primerPuntoReal.valor > 0 ? ((fin.valor - primerPuntoReal.valor) / primerPuntoReal.valor * 100) : 0;
   const primeraCompraFecha = operaciones.filter(o => o.tipo === 'compra').sort((a, b) => a.fecha.localeCompare(b.fecha))[0]?.fecha;
@@ -374,25 +383,17 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Métricas — sin "Valor actual" para no confundir con el capital real */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-        <MetricaCard label="RETORNO TOTAL" small
-          value={(rendimientoActual >= 0 ? '+' : '') + rendimientoActual.toFixed(2) + '%'}
-          valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
-        <MetricaCard label="VARIACIÓN PERÍODO" small
-          value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'}
-          valueColor={colorV(variacionCapital)} sub="Desde primera compra" />
-        <MetricaCard label="PRIMERA INVERSIÓN" small
-          value={primeraCompraFecha ? new Date(primeraCompraFecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
-          sub="Fecha de inicio del portfolio" />
+        <MetricaCard label="RETORNO TOTAL" small value={(rendimientoActual >= 0 ? '+' : '') + rendimientoActual.toFixed(2) + '%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
+        <MetricaCard label="VARIACIÓN PERÍODO" small value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Desde primera compra" />
+        <MetricaCard label="PRIMERA INVERSIÓN" small value={primeraCompraFecha ? new Date(primeraCompraFecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'} sub="Fecha de inicio del portfolio" />
       </div>
 
-      {/* Gráfico 1 — Evolución del capital */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
             <div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Estimación basada en el movimiento del activo subyacente</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Anclado al valor actual de IOL · tendencia basada en el subyacente</div>
           </div>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
@@ -403,18 +404,14 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-              tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
-            <Tooltip contentStyle={tooltipStyle}
-              formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']}
-              labelFormatter={labelFmt} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
             <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} name="valor" />
             <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="invertido" />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Gráfico 2 — Evolución del rendimiento */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
@@ -422,9 +419,7 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
             <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>
-              {rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%
-            </div>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div>
             <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div>
           </div>
         </div>
@@ -432,14 +427,9 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-              tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
-            <Tooltip contentStyle={tooltipStyle}
-              formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']}
-              labelFormatter={labelFmt} />
-            <Line type="monotone" dataKey="rendimiento"
-              stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'}
-              strokeWidth={2} dot={false} name="rendimiento" />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']} labelFormatter={labelFmt} />
+            <Line type="monotone" dataKey="rendimiento" stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} name="rendimiento" />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -797,7 +787,7 @@ export default function PortfolioPage() {
           {tab === 'mapa'         && <TabMapa posiciones={posiciones} />}
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'performance'  && <TabPerformance posiciones={posiciones} />}
-          {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} />}
+          {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} valorActualIol={valorTotalUSD} />}
           {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} />}
         </>
       )}
