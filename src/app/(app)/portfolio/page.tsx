@@ -367,7 +367,7 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
           const posMap = calcularPosicionesBase(opsUpTo);
           let valor = 0;
-          for (const pos of posMap.values()) {
+          for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
             if (!h?.length) continue;
             const available = h.filter(p => p.fecha <= fecha);
