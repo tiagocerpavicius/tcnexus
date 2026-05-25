@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown, Wand2 } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
 import { supabase } from '@/lib/supabase';
 
@@ -8,11 +8,11 @@ interface Operacion {
   id: string; fecha: string; ticker: string; nombre: string | null;
   tipo: 'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro';
   cantidad: number | null; precio_unitario: number | null; monto_usd: number;
-  moneda: 'ARS' | 'USD'; tipo_activo: string | null; sector: string | null;
+  moneda: 'ARS' | 'USD'; tipo_activo: string | null;
   broker: string | null; notas: string | null;
 }
 interface PosicionBase {
-  ticker: string; nombre: string; tipo_activo: string; sector: string;
+  ticker: string; nombre: string; tipo_activo: string;
   broker: string; moneda: 'ARS' | 'USD'; cantidad: number; costoTotalUSD: number;
 }
 interface PosicionCompleta extends PosicionBase {
@@ -29,7 +29,6 @@ const colorV = (n: number | null) => n == null ? 'var(--text2)' : n > 0 ? 'var(-
 const TIPO_LABELS: Record<string, string> = { cedear: 'CEDEAR', accion_ar: 'Acción AR', bono: 'Bono', on: 'ON', etf: 'ETF', crypto: 'Crypto', efectivo: 'Efectivo', otro: 'Otro' };
 const TIPO_COLORS_OP: Record<string, string> = { compra: 'var(--green)', venta: 'var(--red)', dividendo: 'var(--violet-light)', deposito: '#06b6d4', retiro: 'var(--amber)' };
 const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
-const SECTORES = ['Tecnología','Financiero','Energía','Consumo masivo','Salud','Industria','Materiales','Inmobiliario','Telecomunicaciones','Cripto','Renta Fija Soberana','Renta Fija Corporativa','ETF Diversificado','Otro'];
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
   const compras = operaciones.filter(o => o.tipo === 'compra');
@@ -55,7 +54,7 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
     if (!map.has(op.ticker)) {
-      map.set(op.ticker, { ticker: op.ticker, nombre: op.nombre || op.ticker, tipo_activo: op.tipo_activo || 'otro', sector: op.sector || 'Otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
+      map.set(op.ticker, { ticker: op.ticker, nombre: op.nombre || op.ticker, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
     }
     const pos = map.get(op.ticker)!;
     if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
@@ -142,7 +141,7 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo','Precio','Cantidad','Costo Prom.','Valor Actual','P&L USD','P&L %','Var. Hoy','Sector','Broker'].map(h => (
+              {['Activo','Precio','Cantidad','Costo Prom.','Valor Actual','P&L USD','P&L %','Var. Hoy','Tipo','Broker'].map(h => (
                 <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -155,12 +154,7 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
                   {p.nombre !== p.ticker && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : (
-                    <div>
-                      <div style={{ color: 'var(--text)' }}>{p.precioActual != null ? (p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual)) : '—'}</div>
-                      <div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div>
-                    </div>
-                  )}
+                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div><div style={{ color: 'var(--text)' }}>{p.precioActual != null ? (p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual)) : '—'}</div><div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div></div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtUSD(p.costoPromedioUSD)}</td>
@@ -169,19 +163,17 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  <span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{p.sector || 'Otro'}</span>
+                  <span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span>
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted2)', fontSize: '12px' }}>{p.broker}</td>
               </tr>
             ))}
             {efectivoUSD > 0 && (
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
-                <td style={{ padding: '12px 16px' }}><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: '#06b6d4' }}>Liquidez</div><div style={{ fontSize: '11px', color: 'var(--muted)' }}>Efectivo disponible</div></td>
+                <td style={{ padding: '12px 16px' }}><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: '#06b6d4' }}>Liquidez</div></td>
                 <td colSpan={3} />
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: '#06b6d4', fontWeight: 500 }}>{fmtUSD(efectivoUSD)}</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
+                <td colSpan={3} style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
                 <td />
               </tr>
@@ -204,19 +196,12 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
 }
 
 function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
-  const data = posiciones
-    .filter(p => p.valorActualUSD != null && p.valorActualUSD > 0)
-    .map(p => ({ name: p.ticker, value: p.valorActualUSD!, pnlPct: p.pnlPct ?? 0 }))
-    .sort((a, b) => b.value - a.value);
-
+  const data = posiciones.filter(p => p.valorActualUSD != null && p.valorActualUSD > 0).map(p => ({ name: p.ticker, value: p.valorActualUSD!, pnlPct: p.pnlPct ?? 0 })).sort((a, b) => b.value - a.value);
   if (!data.length) return <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>No hay posiciones con valor calculado.</div>;
-
   const total = data.reduce((s, d) => s + d.value, 0);
   const mitad = Math.ceil(data.length / 2);
-  const row1 = data.slice(0, mitad);
-  const row2 = data.slice(mitad);
+  const row1 = data.slice(0, mitad), row2 = data.slice(mitad);
   const row1Pct = total > 0 ? (row1.reduce((s, d) => s + d.value, 0) / total) * 100 : 60;
-
   const renderItem = (d: { name: string; value: number; pnlPct: number }) => {
     const pct = (d.value / total) * 100;
     return (
@@ -227,7 +212,6 @@ function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
       </div>
     );
   };
-
   return (
     <div className="card">
       <div style={{ marginBottom: '14px' }}>
@@ -252,83 +236,33 @@ function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
 
 function TabDistribucion({ posiciones, efectivoUSD }: { posiciones: PosicionCompleta[]; efectivoUSD: number }) {
   const valorTotalUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0) + efectivoUSD;
-  const byTicker = [
-    ...posiciones.filter(p => p.valorActualUSD != null).map(p => ({ name: p.ticker, value: p.valorActualUSD! })).sort((a, b) => b.value - a.value),
-    ...(efectivoUSD > 0 ? [{ name: 'Liquidez', value: efectivoUSD }] : []),
-  ];
-  const bySector = posiciones.reduce((acc, p) => {
-    const s = p.sector || 'Otro';
-    const ex = acc.find(a => a.name === s);
-    if (ex) ex.value += p.valorActualUSD || 0; else acc.push({ name: s, value: p.valorActualUSD || 0 });
-    return acc;
-  }, [] as { name: string; value: number }[]);
-  if (efectivoUSD > 0) bySector.push({ name: 'Liquidez', value: efectivoUSD });
+  const byTicker = [...posiciones.filter(p => p.valorActualUSD != null).map(p => ({ name: p.ticker, value: p.valorActualUSD! })).sort((a, b) => b.value - a.value), ...(efectivoUSD > 0 ? [{ name: 'Liquidez', value: efectivoUSD }] : [])];
+  const byTipo = posiciones.reduce((acc, p) => { const tipo = TIPO_LABELS[p.tipo_activo] || p.tipo_activo; const ex = acc.find(a => a.name === tipo); if (ex) ex.value += p.valorActualUSD || 0; else acc.push({ name: tipo, value: p.valorActualUSD || 0 }); return acc; }, [] as { name: string; value: number }[]);
+  if (efectivoUSD > 0) byTipo.push({ name: 'Liquidez', value: efectivoUSD });
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-      <DistChart title="🥧 Distribución por activo" data={byTicker} total={valorTotalUSD} />
-      <DistChart title="🏭 Distribución por sector" data={bySector.sort((a, b) => b.value - a.value)} total={valorTotalUSD} />
+      <DistChart title="🥧 Por activo" data={byTicker} total={valorTotalUSD} />
+      <DistChart title="📦 Por tipo" data={byTipo.sort((a, b) => b.value - a.value)} total={valorTotalUSD} />
     </div>
   );
 }
 
-function TabRiesgo({ posiciones, valorTotalUSD }: { posiciones: PosicionCompleta[]; valorTotalUSD: number }) {
-  const bySector = posiciones.reduce((acc, p) => {
-    const s = p.sector || 'Otro';
-    const ex = acc.find(a => a.name === s);
-    const val = p.valorActualUSD || 0;
-    if (ex) ex.value += val; else acc.push({ name: s, value: val });
-    return acc;
-  }, [] as { name: string; value: number }[]).sort((a, b) => b.value - a.value);
-
+function TabPerformance({ posiciones }: { posiciones: PosicionCompleta[] }) {
   const sorted = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
-  const top3 = sorted.slice(0, Math.min(3, sorted.length));
-  const bot3 = sorted.slice(-Math.min(3, sorted.length)).reverse();
-
+  const top = sorted.slice(0, Math.min(5, sorted.length));
+  const bot = sorted.slice(-Math.min(5, sorted.length)).reverse();
+  const renderItem = (p: PosicionCompleta, i: number, isTop: boolean) => (
+    <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: i < (isTop ? top : bot).length - 1 ? '8px' : '0', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
+      <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: isTop ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: isTop ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
+      <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
+      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(p.pnlPct), fontWeight: 600 }}>{fmtPct(p.pnlPct)}</span>
+      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--muted)' }}>{fmtUSD(p.pnlUSD)}</span>
+    </div>
+  );
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-      <div className="card">
-        <div className="label-xs" style={{ marginBottom: '16px' }}>🏭 Exposición sectorial</div>
-        {bySector.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '13px' }}>Agregá operaciones con sector para ver la exposición.</div>}
-        {bySector.map((s, i) => {
-          const pct = valorTotalUSD > 0 ? (s.value / valorTotalUSD) * 100 : 0;
-          return (
-            <div key={s.name} style={{ marginBottom: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text2)', fontFamily: 'DM Sans, sans-serif' }}>{s.name}</span>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: 'var(--muted)' }}>{fmtUSD(s.value)}</span>
-                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)', fontWeight: 600, minWidth: '44px', textAlign: 'right' }}>{pct.toFixed(1)}%</span>
-                </div>
-              </div>
-              <div style={{ height: '6px', background: 'var(--border)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${pct}%`, background: DIST_COLORS[i % DIST_COLORS.length], borderRadius: '3px' }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        <div className="card">
-          <div className="label-xs" style={{ marginBottom: '14px' }}>🏆 Mejor performance</div>
-          {top3.map((p, i) => (
-            <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: i < top3.length - 1 ? '8px' : '0', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
-              <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(34,197,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--green)', flexShrink: 0 }}>{i + 1}</div>
-              <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
-              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--green)', fontWeight: 600 }}>{fmtPct(p.pnlPct)}</span>
-            </div>
-          ))}
-        </div>
-        <div className="card">
-          <div className="label-xs" style={{ marginBottom: '14px' }}>📉 Peor performance</div>
-          {bot3.map((p, i) => (
-            <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: i < bot3.length - 1 ? '8px' : '0', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
-              <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(244,63,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
-              <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
-              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(p.pnlPct), fontWeight: 600 }}>{fmtPct(p.pnlPct)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      <div className="card"><div className="label-xs" style={{ marginBottom: '14px' }}>🏆 Mejor performance</div>{top.map((p, i) => renderItem(p, i, true))}</div>
+      <div className="card"><div className="label-xs" style={{ marginBottom: '14px' }}>📉 Peor performance</div>{bot.map((p, i) => renderItem(p, i, false))}</div>
     </div>
   );
 }
@@ -351,11 +285,12 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
             const base = ticker.endsWith('D') && ticker.length > 2 ? ticker.slice(0, -1) : ticker;
             const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=1y`);
             const data = await res.json();
-            if (!data.error && data.precios?.length) historicos[ticker] = data.precios;
+            // La clave correcta es 'historico', no 'precios'
+            if (!data.error && data.historico?.length) historicos[ticker] = data.historico;
           } catch {}
         }));
 
-        if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
+        if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos para las posiciones.'); setLoading(false); return; }
 
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
@@ -392,18 +327,8 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     build();
   }, [operaciones, mep]);
 
-  if (loading) return (
-    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
-      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div>
-      <div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Esto puede tardar unos segundos</div>
-    </div>
-  );
-
-  if (error || !datos.length) return (
-    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
-      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div>
-    </div>
-  );
+  if (loading) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div><div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div></div>;
+  if (error || !datos.length) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes. Necesitás al menos una compra registrada.'}</div></div>;
 
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
   const fin = datos[datos.length - 1];
@@ -411,88 +336,53 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
   const rendimientoActual = fin.rendimiento;
   const variacionCapital = inicio.valor > 0 ? ((fin.valor - inicio.valor) / inicio.valor * 100) : 0;
 
-  const xAxisProps = {
-    dataKey: 'fecha',
-    tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' },
-    tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; },
-    interval: 'preserveStartEnd' as const,
-  };
-
+  const xAxisProps = { dataKey: 'fecha', tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }, tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; }, interval: 'preserveStartEnd' as const };
   const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
   const labelFmt = (v: string) => new Date(v + 'T00:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+        <MetricaCard label="VALOR ACTUAL" small value={fmtUSD(fin.valor)} sub="Portfolio total" />
+        <MetricaCard label="VARIACIÓN PERÍODO" small value={variacionCapital >= 0 ? '+' + variacionCapital.toFixed(1) + '%' : variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Últimos 12 meses" />
+        <MetricaCard label="RETORNO TOTAL" small value={rendimientoActual >= 0 ? '+' + rendimientoActual.toFixed(2) + '%' : rendimientoActual.toFixed(2) + '%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
+      </div>
 
-      {/* Gráfico 1 — Evolución del capital */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-          <div>
-            <div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Valor del portfolio vs capital invertido en USD</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: 'var(--text)' }}>{fmtUSD(fin.valor)}</div>
-            <div style={{ fontSize: '11px', color: colorV(variacionCapital), fontFamily: 'DM Mono, monospace' }}>
-              {variacionCapital >= 0 ? '+' : ''}{variacionCapital.toFixed(1)}% en el período
-            </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <div><div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Valor del portfolio vs capital invertido en USD</div></div>
+          <div style={{ display: 'flex', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '0', borderTop: '2px dashed #06b6d4' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Invertido</span></div>
           </div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-              tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`} width={55} />
-            <Tooltip contentStyle={tooltipStyle}
-              formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']}
-              labelFormatter={labelFmt} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`} width={55} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
             <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} name="valor" />
             <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="invertido" />
           </LineChart>
         </ResponsiveContainer>
-        <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', marginTop: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '20px', height: '2px', background: '#7c3aed' }} />
-            <span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Valor portfolio</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '20px', height: '0', borderTop: '2px dashed #06b6d4' }} />
-            <span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Capital invertido</span>
-          </div>
-        </div>
       </div>
 
-      {/* Gráfico 2 — Evolución del rendimiento */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-          <div>
-            <div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>
-              {rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div>
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <div><div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div></div>
+          <div style={{ textAlign: 'right' }}><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div><div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div></div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-              tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
-            <Tooltip contentStyle={tooltipStyle}
-              formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']}
-              labelFormatter={labelFmt} />
-            <Line type="monotone" dataKey="rendimiento"
-              stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'}
-              strokeWidth={2} dot={false} name="rendimiento" />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
+            <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']} labelFormatter={labelFmt} />
+            <Line type="monotone" dataKey="rendimiento" stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} name="rendimiento" />
           </LineChart>
         </ResponsiveContainer>
       </div>
-
     </div>
   );
 }
@@ -509,7 +399,7 @@ function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; o
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Fecha','Tipo','Ticker','Cantidad','Precio Unit.','Monto USD','Moneda','Sector','Broker',''].map(h => (
+              {['Fecha','Tipo','Ticker','Cantidad','Precio Unit.','Monto USD','Moneda','Broker',''].map(h => (
                 <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -524,7 +414,6 @@ function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; o
                 <td style={{ padding: '10px 16px', color: 'var(--text2)' }}>{op.precio_unitario != null ? (op.moneda === 'ARS' ? fmtARS(op.precio_unitario) : fmtUSD(op.precio_unitario)) : '—'}</td>
                 <td style={{ padding: '10px 16px', color: 'var(--text)', fontWeight: 500 }}>{fmtUSD(op.monto_usd)}</td>
                 <td style={{ padding: '10px 16px', color: 'var(--muted2)' }}>{op.moneda}</td>
-                <td style={{ padding: '10px 16px', color: 'var(--muted2)', fontSize: '12px' }}>{op.sector || '—'}</td>
                 <td style={{ padding: '10px 16px', color: 'var(--muted2)' }}>{op.broker || '—'}</td>
                 <td style={{ padding: '10px 16px' }}>
                   {confirmDelete === op.id ? (
@@ -548,37 +437,18 @@ function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; o
 function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => void; onSave: (op: any) => Promise<void> }) {
   const [tipo, setTipo] = useState<'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro'>('compra');
   const [ticker, setTicker] = useState('');
-  const [nombre, setNombre] = useState('');
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [cantidad, setCantidad] = useState('');
   const [precioUnitario, setPrecioUnitario] = useState('');
   const [moneda, setMoneda] = useState<'USD' | 'ARS'>('USD');
   const [tipoActivo, setTipoActivo] = useState('cedear');
-  const [sector, setSector] = useState('Tecnología');
   const [broker, setBroker] = useState('');
   const [notas, setNotas] = useState('');
   const [montoDirecto, setMontoDirecto] = useState('');
   const [saving, setSaving] = useState(false);
-  const [loadingSector, setLoadingSector] = useState(false);
-  const [sectorDetectado, setSectorDetectado] = useState(false);
 
   const isAssetOp = tipo === 'compra' || tipo === 'venta';
-  const isCashOp  = tipo === 'deposito' || tipo === 'retiro' || tipo === 'dividendo';
-
-  useEffect(() => {
-    if (!ticker || ticker.length < 2 || !isAssetOp) { setSectorDetectado(false); return; }
-    const timer = setTimeout(async () => {
-      setLoadingSector(true);
-      try {
-        const res = await fetch(`/api/perfil?ticker=${ticker}`);
-        const data = await res.json();
-        if (!data.error && data.sector) { setSector(data.sector); setSectorDetectado(true); }
-        if (!data.error && data.nombre && !nombre) setNombre(data.nombre);
-      } catch {}
-      setLoadingSector(false);
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [ticker, isAssetOp]);
+  const isCashOp = tipo === 'deposito' || tipo === 'retiro' || tipo === 'dividendo';
 
   const calcMontoUSD = () => {
     if (isCashOp) { const m = parseFloat(montoDirecto); return isNaN(m) ? 0 : moneda === 'ARS' ? m / mep : m; }
@@ -588,24 +458,21 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
   };
 
   const montoUSDPreview = calcMontoUSD();
-  const canSave = isCashOp
-    ? parseFloat(montoDirecto) > 0
-    : ticker.trim() && parseFloat(cantidad) > 0 && parseFloat(precioUnitario) > 0;
+  const canSave = isCashOp ? parseFloat(montoDirecto) > 0 : ticker.trim() && parseFloat(cantidad) > 0 && parseFloat(precioUnitario) > 0;
 
   const handleSave = async () => {
     const monto_usd = calcMontoUSD();
     if (monto_usd <= 0) return;
     setSaving(true);
-    const tickerFinal = isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO';
     await onSave({
-      fecha, ticker: tickerFinal,
-      nombre: isAssetOp ? (nombre || tickerFinal) : tipo === 'dividendo' ? tickerFinal : (tipo === 'deposito' ? 'Depósito' : 'Retiro'),
+      fecha,
+      ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO',
+      nombre: isAssetOp ? ticker.toUpperCase().trim() : tipo === 'dividendo' ? ticker.toUpperCase().trim() : (tipo === 'deposito' ? 'Depósito' : 'Retiro'),
       tipo,
       cantidad: isAssetOp ? parseFloat(cantidad) || null : null,
       precio_unitario: isAssetOp ? parseFloat(precioUnitario) || null : null,
       monto_usd, moneda,
       tipo_activo: isAssetOp ? tipoActivo : 'efectivo',
-      sector: isAssetOp ? sector : null,
       broker: broker || null, notas: notas || null,
     });
     setSaving(false);
@@ -615,7 +482,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '540px', maxHeight: '92vh', overflowY: 'auto' }}>
+      <div className="card" style={{ width: '100%', maxWidth: '520px', maxHeight: '92vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
           <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Agregar operación</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
@@ -624,17 +491,8 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
         <div style={{ marginBottom: '16px' }}>
           <div className="label-xs" style={ls}>Tipo de operación</div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            {[
-              { key: 'compra',   label: '🛒 Compra' },
-              { key: 'venta',    label: '💸 Venta' },
-              { key: 'dividendo',label: '🎁 Dividendo' },
-              { key: 'deposito', label: '💵 Depósito' },
-              { key: 'retiro',   label: '🏦 Retiro' },
-            ].map(t => (
-              <button key={t.key} onClick={() => setTipo(t.key as any)}
-                style={{ background: tipo === t.key ? 'var(--violet)' : 'var(--surface2)', color: tipo === t.key ? '#fff' : 'var(--text2)', border: `1px solid ${tipo === t.key ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
-                {t.label}
-              </button>
+            {[{ key: 'compra', label: '🛒 Compra' },{ key: 'venta', label: '💸 Venta' },{ key: 'dividendo', label: '🎁 Dividendo' },{ key: 'deposito', label: '💵 Depósito' },{ key: 'retiro', label: '🏦 Retiro' }].map(t => (
+              <button key={t.key} onClick={() => setTipo(t.key as any)} style={{ background: tipo === t.key ? 'var(--violet)' : 'var(--surface2)', color: tipo === t.key ? '#fff' : 'var(--text2)', border: `1px solid ${tipo === t.key ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>{t.label}</button>
             ))}
           </div>
         </div>
@@ -648,12 +506,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           {(isAssetOp || tipo === 'dividendo') && (
             <div style={{ gridColumn: '1 / -1' }}>
               <div className="label-xs" style={ls}>Ticker</div>
-              <div style={{ position: 'relative' }}>
-                <input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..."
-                  value={ticker} onChange={e => { setTicker(e.target.value.toUpperCase()); setSectorDetectado(false); }} />
-                {loadingSector && <div style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '14px', height: '14px', border: '2px solid var(--violet)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />}
-              </div>
-              {sectorDetectado && <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--green)', fontFamily: 'DM Mono, monospace' }}>✓ Sector detectado automáticamente</div>}
+              <input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} />
             </div>
           )}
 
@@ -667,7 +520,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
                 <div className="label-xs" style={ls}>Precio unitario</div>
                 <input className="input-field" type="number" placeholder="0.00" value={precioUnitario} onChange={e => setPrecioUnitario(e.target.value)} min="0" step="any" />
               </div>
-              <div>
+              <div style={{ gridColumn: '1 / -1' }}>
                 <div className="label-xs" style={ls}>Tipo de activo</div>
                 <select className="input-field" value={tipoActivo} onChange={e => setTipoActivo(e.target.value)} style={{ cursor: 'pointer' }}>
                   <option value="cedear">CEDEAR</option>
@@ -677,16 +530,6 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
                   <option value="etf">ETF</option>
                   <option value="crypto">Crypto</option>
                   <option value="otro">Otro</option>
-                </select>
-              </div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                  <span className="label-xs" style={{ margin: 0 }}>Sector</span>
-                  {loadingSector && <span style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>detectando...</span>}
-                  {sectorDetectado && <span style={{ fontSize: '10px', color: 'var(--green)', fontFamily: 'DM Mono, monospace' }}>✓ auto</span>}
-                </div>
-                <select className="input-field" value={sector} onChange={e => setSector(e.target.value)} style={{ cursor: 'pointer' }}>
-                  {SECTORES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
             </>
@@ -703,8 +546,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
             <div className="label-xs" style={ls}>Moneda</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               {['USD','ARS'].map(m => (
-                <button key={m} onClick={() => setMoneda(m as any)}
-                  style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>
+                <button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>
               ))}
             </div>
           </div>
@@ -746,14 +588,13 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-type Tab = 'posiciones' | 'mapa' | 'distribucion' | 'riesgo' | 'historial' | 'operaciones';
+type Tab = 'posiciones' | 'mapa' | 'distribucion' | 'performance' | 'historial' | 'operaciones';
 
 export default function PortfolioPage() {
   const [operaciones, setOperaciones] = useState<Operacion[]>([]);
   const [posiciones, setPosiciones] = useState<PosicionCompleta[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [actualizandoSectores, setActualizandoSectores] = useState(false);
   const [mep, setMep] = useState(1430);
   const [tab, setTab] = useState<Tab>('posiciones');
   const [showModal, setShowModal] = useState(false);
@@ -814,31 +655,11 @@ export default function PortfolioPage() {
 
   useEffect(() => { loadData(); }, [mep]);
 
-  // Actualizar sectores automáticamente para todas las posiciones existentes
-  const actualizarTodosSectores = async () => {
-    setActualizandoSectores(true);
-    const tickers = Array.from(new Set(posiciones.map(p => p.ticker)));
-    for (const ticker of tickers) {
-      try {
-        const res = await fetch(`/api/perfil?ticker=${ticker}`);
-        const data = await res.json();
-        if (!data.error && data.sector) {
-          await supabase.from('operaciones').update({ sector: data.sector }).eq('ticker', ticker);
-        }
-      } catch {}
-    }
-    await loadData(true);
-    setActualizandoSectores(false);
-  };
-
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
   const gananciaNeta = valorTotalUSD - totalInvertidoUSD;
   const gananciaNetaPct = totalInvertidoUSD > 0 ? (gananciaNeta / totalInvertidoUSD) * 100 : 0;
-  const variacionHoy = posiciones.reduce((s, p) => {
-    if (p.variacionDiaria != null && p.valorActualUSD != null) return s + p.valorActualUSD - (p.valorActualUSD / (1 + p.variacionDiaria / 100));
-    return s;
-  }, 0);
+  const variacionHoy = posiciones.reduce((s, p) => { if (p.variacionDiaria != null && p.valorActualUSD != null) return s + p.valorActualUSD - (p.valorActualUSD / (1 + p.variacionDiaria / 100)); return s; }, 0);
   const variacionHoyPct = (valorTotalUSD - variacionHoy) > 0 ? (variacionHoy / (valorTotalUSD - variacionHoy)) * 100 : 0;
   const sortedByVal = posiciones.filter(p => p.valorActualUSD != null).sort((a, b) => b.valorActualUSD! - a.valorActualUSD!);
   const top3Val = sortedByVal.slice(0, 3).reduce((s, p) => s + (p.valorActualUSD || 0), 0);
@@ -856,15 +677,8 @@ export default function PortfolioPage() {
           <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Portfolio</h1>
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Vista consolidada de posiciones, liquidez y rendimiento.</div>
         </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {posiciones.length > 0 && (
-            <button onClick={actualizarTodosSectores} disabled={actualizandoSectores}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}>
-              <Wand2 size={14} /> {actualizandoSectores ? 'Detectando...' : 'Auto-sectores'}
-            </button>
-          )}
-          <button onClick={() => loadData(true)}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={() => loadData(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}>
             <RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} /> Actualizar
           </button>
           <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -906,15 +720,14 @@ export default function PortfolioPage() {
 
           <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', overflowX: 'auto' }}>
             {[
-              { key: 'posiciones' as Tab,   label: 'Posiciones',  icon: '📋' },
-              { key: 'mapa' as Tab,         label: 'Mapa',         icon: '🗺️' },
-              { key: 'distribucion' as Tab, label: 'Distribución', icon: '🥧' },
-              { key: 'riesgo' as Tab,       label: 'Exposición',   icon: '🏭' },
-              { key: 'historial' as Tab,    label: 'Historial',    icon: '📈' },
-              { key: 'operaciones' as Tab,  label: 'Operaciones',  icon: '📝' },
+              { key: 'posiciones' as Tab,   label: 'Posiciones',   icon: '📋' },
+              { key: 'mapa' as Tab,         label: 'Mapa',          icon: '🗺️' },
+              { key: 'distribucion' as Tab, label: 'Distribución',  icon: '🥧' },
+              { key: 'performance' as Tab,  label: 'Performance',   icon: '🏆' },
+              { key: 'historial' as Tab,    label: 'Historial',     icon: '📈' },
+              { key: 'operaciones' as Tab,  label: 'Operaciones',   icon: '📝' },
             ].map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
+              <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
                 <span>{t.icon}</span> {t.label}
               </button>
             ))}
@@ -923,7 +736,7 @@ export default function PortfolioPage() {
           {tab === 'posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'mapa'         && <TabMapa posiciones={posiciones} />}
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
-          {tab === 'riesgo'       && <TabRiesgo posiciones={posiciones} valorTotalUSD={valorTotalUSD} />}
+          {tab === 'performance'  && <TabPerformance posiciones={posiciones} />}
           {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} />}
           {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} />}
         </>
