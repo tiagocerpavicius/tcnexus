@@ -196,7 +196,7 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
 
   const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
 
-  for (const [boleto, rows] of groups) {
+  for (const [boleto, rows] of Array.from(groups.entries())) {
     const tipoMov = rows[0]['Tipo Mov.'] || '';
     const opInfo = parseIOLTipoMov(tipoMov);
     if (!opInfo) continue;
@@ -299,7 +299,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
 
   const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
 
-  for (const [boleto, rows] of boletoGroups) {
+  for (const [boleto, rows] of Array.from(boletoGroups.entries())) {
     const { _tipo: tipo, _ticker: ticker } = rows[0];
     const tipoInstr = rows[0]['Tipo de Instrumento'] || null;
 
@@ -341,7 +341,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     divGrouped.get(key)!.push(row);
   }
 
-  for (const [key, rows] of divGrouped) {
+  for (const [key, rows] of Array.from(divGrouped.entries())) {
     const usdRow = rows.find(r => {
       const m = String(r['Moneda'] || '');
       return (m.includes('Dólar') || m.includes('Dollar')) && (r['Importe'] || 0) > 0;
