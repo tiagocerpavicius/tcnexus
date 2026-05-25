@@ -276,48 +276,79 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     const build = async () => {
       setLoading(true); setError('');
       try {
-        const tickers = Array.from(new Set(operaciones.filter(o => o.tipo === 'compra' || o.tipo === 'venta').map(o => o.ticker)));
-        if (!tickers.length) { setLoading(false); return; }
+        const compras = operaciones.filter(o => o.tipo === 'compra');
+        if (!compras.length) { setLoading(false); return; }
 
+        const tickers = Array.from(new Set(compras.map(o => o.ticker)));
+
+        // Histórico de precios para cada ticker
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
         await Promise.all(tickers.map(async ticker => {
           try {
             const base = ticker.endsWith('D') && ticker.length > 2 ? ticker.slice(0, -1) : ticker;
             const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=1y`);
             const data = await res.json();
-            // La clave correcta es 'historico', no 'precios'
             if (!data.error && data.historico?.length) historicos[ticker] = data.historico;
           } catch {}
         }));
 
-        if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos para las posiciones.'); setLoading(false); return; }
+        if (!Object.keys(historicos).length) {
+          setError('No se pudo obtener datos históricos para las posiciones.');
+          setLoading(false);
+          return;
+        }
 
+        // Precio base de cada ticker: precio en la fecha de la primera compra
+        // Esto permite escalar correctamente el costo por el movimiento del precio
+        const basePrices: Record<string, number> = {};
+        for (const ticker of tickers) {
+          const h = historicos[ticker];
+          if (!h?.length) continue;
+          const primeraCompra = compras.filter(o => o.ticker === ticker).sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
+          if (!primeraCompra) continue;
+          // Precio más cercano a la fecha de compra
+          const precioBase = h.filter(p => p.fecha <= primeraCompra.fecha).at(-1)?.cierre
+            || h.find(p => p.fecha >= primeraCompra.fecha)?.cierre;
+          if (precioBase) basePrices[ticker] = precioBase;
+        }
+
+        // Fechas desde la primera compra
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
-        const firstCompra = operaciones.filter(o => o.tipo === 'compra').sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
-        const startDate = firstCompra?.fecha || '';
-        const sortedDates = Array.from(allDates).sort().filter(d => d >= startDate);
+        const primeraFecha = compras.sort((a, b) => a.fecha.localeCompare(b.fecha))[0].fecha;
+        const sortedDates = Array.from(allDates).sort().filter(d => d >= primeraFecha);
 
         const puntos = sortedDates.map(fecha => {
           const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
           const posMap = calcularPosicionesBase(opsUpTo);
           let valor = 0;
+
           for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
-            if (!h?.length) continue;
-            const available = h.filter(p => p.fecha <= fecha);
-            if (!available.length) continue;
-            const price = available[available.length - 1].cierre;
-            valor += (pos.moneda === 'ARS' ? price / mep : price) * pos.cantidad;
+            const basePrice = basePrices[pos.ticker];
+
+            if (!h?.length || !basePrice) {
+              // Sin datos históricos: usar costo como proxy (sin cambio)
+              valor += pos.costoTotalUSD;
+              continue;
+            }
+
+            // Precio en la fecha evaluada
+            const precioFecha = h.filter(p => p.fecha <= fecha).at(-1)?.cierre;
+            if (!precioFecha) { valor += pos.costoTotalUSD; continue; }
+
+            // Escalar el costo por el movimiento del precio
+            // Ej: si NVDA subió 5% desde la compra, la posición vale 5% más
+            valor += pos.costoTotalUSD * (precioFecha / basePrice);
           }
-          const depositos = opsUpTo.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0);
-          const retiros   = opsUpTo.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
-          const compras   = opsUpTo.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
-          const ventas    = opsUpTo.filter(o => o.tipo === 'venta').reduce((s, o) => s + o.monto_usd, 0);
-          valor += Math.max(0, depositos + ventas - compras - retiros);
-          const invertido = compras;
+
+          // Sumar efectivo (depósitos no invertidos)
+          valor += Math.max(0, calcularEfectivoUSD(opsUpTo));
+
+          const invertido = opsUpTo.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
           const rendimiento = invertido > 0 ? +((valor - invertido) / invertido * 100).toFixed(2) : 0;
-          return { fecha, valor: Math.round(valor * 100) / 100, invertido: Math.round(invertido * 100) / 100, rendimiento };
+
+          return { fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento };
         }).filter(p => p.valor > 0);
 
         setDatos(puntos);
@@ -327,16 +358,31 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     build();
   }, [operaciones, mep]);
 
-  if (loading) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div><div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div></div>;
-  if (error || !datos.length) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes. Necesitás al menos una compra registrada.'}</div></div>;
+  if (loading) return (
+    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
+      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div>
+      <div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div>
+    </div>
+  );
+
+  if (error || !datos.length) return (
+    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
+      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div>
+    </div>
+  );
 
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
-  const fin = datos[datos.length - 1];
   const inicio = datos[0];
+  const fin = datos[datos.length - 1];
   const rendimientoActual = fin.rendimiento;
   const variacionCapital = inicio.valor > 0 ? ((fin.valor - inicio.valor) / inicio.valor * 100) : 0;
 
-  const xAxisProps = { dataKey: 'fecha', tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }, tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; }, interval: 'preserveStartEnd' as const };
+  const xAxisProps = {
+    dataKey: 'fecha',
+    tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' },
+    tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; },
+    interval: 'preserveStartEnd' as const,
+  };
   const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
   const labelFmt = (v: string) => new Date(v + 'T00:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 
@@ -344,13 +390,16 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
         <MetricaCard label="VALOR ACTUAL" small value={fmtUSD(fin.valor)} sub="Portfolio total" />
-        <MetricaCard label="VARIACIÓN PERÍODO" small value={variacionCapital >= 0 ? '+' + variacionCapital.toFixed(1) + '%' : variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Últimos 12 meses" />
-        <MetricaCard label="RETORNO TOTAL" small value={rendimientoActual >= 0 ? '+' + rendimientoActual.toFixed(2) + '%' : rendimientoActual.toFixed(2) + '%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
+        <MetricaCard label="VARIACIÓN PERÍODO" small value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Últimos 12 meses" />
+        <MetricaCard label="RETORNO TOTAL" small value={(rendimientoActual >= 0 ? '+' : '') + rendimientoActual.toFixed(2) + '%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
       </div>
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div><div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Valor del portfolio vs capital invertido en USD</div></div>
+          <div>
+            <div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Valor estimado del portfolio vs capital invertido en USD</div>
+          </div>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '0', borderTop: '2px dashed #06b6d4' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Invertido</span></div>
@@ -360,7 +409,7 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`} width={55} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
             <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
             <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} name="valor" />
             <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="invertido" />
@@ -370,8 +419,14 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div><div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div></div>
-          <div style={{ textAlign: 'right' }}><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div><div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div></div>
+          <div>
+            <div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div>
+          </div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
