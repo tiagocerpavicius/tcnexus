@@ -281,7 +281,6 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
 
         const tickers = Array.from(new Set(compras.map(o => o.ticker)));
 
-        // Histórico de precios para cada ticker
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
         await Promise.all(tickers.map(async ticker => {
           try {
@@ -292,30 +291,23 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           } catch {}
         }));
 
-        if (!Object.keys(historicos).length) {
-          setError('No se pudo obtener datos históricos para las posiciones.');
-          setLoading(false);
-          return;
-        }
+        if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
 
-        // Precio base de cada ticker: precio en la fecha de la primera compra
-        // Esto permite escalar correctamente el costo por el movimiento del precio
+        // Precio base de cada ticker en la fecha de su primera compra
         const basePrices: Record<string, number> = {};
         for (const ticker of tickers) {
           const h = historicos[ticker];
           if (!h?.length) continue;
           const primeraCompra = compras.filter(o => o.ticker === ticker).sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
           if (!primeraCompra) continue;
-          // Precio más cercano a la fecha de compra
-          const precioBase = h.filter(p => p.fecha <= primeraCompra.fecha).at(-1)?.cierre
-            || h.find(p => p.fecha >= primeraCompra.fecha)?.cierre;
+          const precioBase = h.filter(p => p.fecha <= primeraCompra.fecha).at(-1)?.cierre || h.find(p => p.fecha >= primeraCompra.fecha)?.cierre;
           if (precioBase) basePrices[ticker] = precioBase;
         }
 
-        // Fechas desde la primera compra
+        const primeraFecha = compras.sort((a, b) => a.fecha.localeCompare(b.fecha))[0].fecha;
+
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
-        const primeraFecha = compras.sort((a, b) => a.fecha.localeCompare(b.fecha))[0].fecha;
         const sortedDates = Array.from(allDates).sort().filter(d => d >= primeraFecha);
 
         const puntos = sortedDates.map(fecha => {
@@ -326,32 +318,24 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
             const basePrice = basePrices[pos.ticker];
-
-            if (!h?.length || !basePrice) {
-              // Sin datos históricos: usar costo como proxy (sin cambio)
-              valor += pos.costoTotalUSD;
-              continue;
-            }
-
-            // Precio en la fecha evaluada
+            if (!h?.length || !basePrice) { valor += pos.costoTotalUSD; continue; }
             const precioFecha = h.filter(p => p.fecha <= fecha).at(-1)?.cierre;
             if (!precioFecha) { valor += pos.costoTotalUSD; continue; }
-
-            // Escalar el costo por el movimiento del precio
-            // Ej: si NVDA subió 5% desde la compra, la posición vale 5% más
             valor += pos.costoTotalUSD * (precioFecha / basePrice);
           }
 
-          // Sumar efectivo (depósitos no invertidos)
           valor += Math.max(0, calcularEfectivoUSD(opsUpTo));
-
           const invertido = opsUpTo.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
           const rendimiento = invertido > 0 ? +((valor - invertido) / invertido * 100).toFixed(2) : 0;
-
           return { fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento };
         }).filter(p => p.valor > 0);
 
-        setDatos(puntos);
+        // Punto cero un día antes de la primera compra → ambas curvas arrancan desde 0
+        const diaAntes = new Date(primeraFecha + 'T12:00:00');
+        diaAntes.setDate(diaAntes.getDate() - 1);
+        const zeroPt = { fecha: diaAntes.toISOString().split('T')[0], valor: 0, invertido: 0, rendimiento: 0 };
+
+        setDatos([zeroPt, ...puntos]);
       } catch { setError('Error al cargar los datos históricos.'); }
       setLoading(false);
     };
@@ -365,17 +349,19 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     </div>
   );
 
-  if (error || !datos.length) return (
+  if (error || datos.length <= 1) return (
     <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
       <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div>
     </div>
   );
 
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
-  const inicio = datos[0];
   const fin = datos[datos.length - 1];
   const rendimientoActual = fin.rendimiento;
-  const variacionCapital = inicio.valor > 0 ? ((fin.valor - inicio.valor) / inicio.valor * 100) : 0;
+  // Variación desde primera compra real (ignoramos el punto cero)
+  const primerPuntoReal = datos.find(p => p.valor > 0);
+  const variacionCapital = primerPuntoReal && primerPuntoReal.valor > 0 ? ((fin.valor - primerPuntoReal.valor) / primerPuntoReal.valor * 100) : 0;
+  const primeraCompraFecha = operaciones.filter(o => o.tipo === 'compra').sort((a, b) => a.fecha.localeCompare(b.fecha))[0]?.fecha;
 
   const xAxisProps = {
     dataKey: 'fecha',
@@ -388,17 +374,25 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Métricas — sin "Valor actual" para no confundir con el capital real */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-        <MetricaCard label="VALOR ACTUAL" small value={fmtUSD(fin.valor)} sub="Portfolio total" />
-        <MetricaCard label="VARIACIÓN PERÍODO" small value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Últimos 12 meses" />
-        <MetricaCard label="RETORNO TOTAL" small value={(rendimientoActual >= 0 ? '+' : '') + rendimientoActual.toFixed(2) + '%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
+        <MetricaCard label="RETORNO TOTAL" small
+          value={(rendimientoActual >= 0 ? '+' : '') + rendimientoActual.toFixed(2) + '%'}
+          valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
+        <MetricaCard label="VARIACIÓN PERÍODO" small
+          value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'}
+          valueColor={colorV(variacionCapital)} sub="Desde primera compra" />
+        <MetricaCard label="PRIMERA INVERSIÓN" small
+          value={primeraCompraFecha ? new Date(primeraCompraFecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+          sub="Fecha de inicio del portfolio" />
       </div>
 
+      {/* Gráfico 1 — Evolución del capital */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
             <div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Valor estimado del portfolio vs capital invertido en USD</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Estimación basada en el movimiento del activo subyacente</div>
           </div>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
@@ -409,14 +403,18 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
+              tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
+            <Tooltip contentStyle={tooltipStyle}
+              formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']}
+              labelFormatter={labelFmt} />
             <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} name="valor" />
             <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="invertido" />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
+      {/* Gráfico 2 — Evolución del rendimiento */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
@@ -424,7 +422,9 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
             <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>
+              {rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%
+            </div>
             <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div>
           </div>
         </div>
@@ -432,9 +432,14 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']} labelFormatter={labelFmt} />
-            <Line type="monotone" dataKey="rendimiento" stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} name="rendimiento" />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
+              tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
+            <Tooltip contentStyle={tooltipStyle}
+              formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']}
+              labelFormatter={labelFmt} />
+            <Line type="monotone" dataKey="rendimiento"
+              stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'}
+              strokeWidth={2} dot={false} name="rendimiento" />
           </LineChart>
         </ResponsiveContainer>
       </div>
