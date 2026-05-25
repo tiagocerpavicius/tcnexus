@@ -342,7 +342,7 @@ function TabHistorial({ operaciones, mep }: { operaciones: Operacion[]; mep: num
     const build = async () => {
       setLoading(true); setError('');
       try {
-        const tickers = [...new Set(operaciones.filter(o => o.tipo === 'compra' || o.tipo === 'venta').map(o => o.ticker))];
+        const tickers = Array.from(new Set(operaciones.filter(o => o.tipo === 'compra' || o.tipo === 'venta').map(o => o.ticker)));
         if (!tickers.length) { setLoading(false); return; }
 
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
