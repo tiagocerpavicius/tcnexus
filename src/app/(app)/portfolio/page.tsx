@@ -817,7 +817,7 @@ export default function PortfolioPage() {
   // Actualizar sectores automáticamente para todas las posiciones existentes
   const actualizarTodosSectores = async () => {
     setActualizandoSectores(true);
-    const tickers = [...new Set(posiciones.map(p => p.ticker))];
+    const tickers = Array.from(new Set(posiciones.map(p => p.ticker)));
     for (const ticker of tickers) {
       try {
         const res = await fetch(`/api/perfil?ticker=${ticker}`);
