@@ -1,8 +1,11 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { PieChart, Pie, Cell, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
 import { supabase } from '@/lib/supabase';
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface Operacion {
   id: string; fecha: string; ticker: string; nombre: string | null;
@@ -19,6 +22,17 @@ interface PosicionCompleta extends PosicionBase {
   costoPromedioUSD: number; precioActual: number | null; valorActualUSD: number | null;
   pnlUSD: number | null; pnlPct: number | null; variacionDiaria: number | null; loadingPrecio: boolean;
 }
+interface OpImportada {
+  importId: string;
+  fecha: string; ticker: string; nombre: string | null;
+  tipo: 'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro';
+  cantidad: number | null; precio_unitario: number | null; monto_usd: number;
+  moneda: 'ARS' | 'USD'; tipo_activo: string | null;
+  broker: string | null; notas: string | null;
+  isDuplicate: boolean; selected: boolean;
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 const fmtUSD = (n: number | null, dec = 2) => n == null ? '—' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const fmtARS = (n: number | null) => n == null ? '—' : '$' + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -29,6 +43,8 @@ const colorV = (n: number | null) => n == null ? 'var(--text2)' : n > 0 ? 'var(-
 const TIPO_LABELS: Record<string, string> = { cedear: 'CEDEAR', accion_ar: 'Acción AR', bono: 'Bono', on: 'ON', etf: 'ETF', crypto: 'Crypto', efectivo: 'Efectivo', otro: 'Otro' };
 const TIPO_COLORS_OP: Record<string, string> = { compra: 'var(--green)', venta: 'var(--red)', dividendo: 'var(--violet-light)', deposito: '#06b6d4', retiro: 'var(--amber)' };
 const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
+
+// ─── Helpers de cálculo ───────────────────────────────────────────────────────
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
   const compras = operaciones.filter(o => o.tipo === 'compra');
@@ -93,6 +109,274 @@ async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: nu
   } catch { return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null }; }
 }
 
+// ─── Parsers de importación ───────────────────────────────────────────────────
+
+const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDD','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','NUD','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
+const AR_STOCKS = new Set(['GGAL','YPFD','PAMP','TXAR','ALUA','BMA','LOMA','TECO','CEPU','VALO','CRES','IRCP','METR','COME','HARG','RICH','AGRO','SEMI','SUPV','BBAR','BYMA','NQNF','OEST']);
+
+function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): string {
+  if (tipoInstrumento) {
+    const t = tipoInstrumento.toLowerCase();
+    if (t.includes('cedear')) return 'cedear';
+    if (t.includes('accion') || t.includes('acción')) return 'accion_ar';
+    if (t.includes('renta fija') || t.includes('bono') || t.includes('soberan') || t.includes('negociable')) return 'bono';
+  }
+  const upper = ticker.toUpperCase();
+  const base = upper.endsWith('D') && upper.length > 2 ? upper.slice(0, -1) : upper;
+  if (BONOS_SET.has(upper) || BONOS_SET.has(base)) return 'bono';
+  if (AR_STOCKS.has(upper) || AR_STOCKS.has(base)) return 'accion_ar';
+  if (upper.endsWith('D') && upper.length > 2) return 'cedear';
+  return 'cedear';
+}
+
+function parseIOLMonto(s: any): number {
+  if (s == null) return 0;
+  const str = String(s).trim();
+  if (!str || str === '000' || str === '-' || str === 'NaN') return 0;
+  const cleaned = str.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : Math.abs(n);
+}
+
+function parseIOLDate(s: string): string {
+  if (!s) return '';
+  const parts = s.split('/');
+  if (parts.length === 3) {
+    const [d, m, y] = parts;
+    const year = y.length === 2 ? `20${y}` : y;
+    return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return s;
+}
+
+function parseIOLTipoMov(tipoMov: string): { tipo: 'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro'; ticker: string } | null {
+  if (tipoMov.startsWith('Compra(')) {
+    return { tipo: 'compra', ticker: tipoMov.slice(7, -1).trim() };
+  }
+  if (tipoMov.startsWith('Venta(')) {
+    return { tipo: 'venta', ticker: tipoMov.slice(6, -1).trim() };
+  }
+  if (tipoMov.startsWith('Pago de Dividendos(')) {
+    const inner = tipoMov.slice('Pago de Dividendos('.length, -1).replace(/ US\$$/, '').trim();
+    return { tipo: 'dividendo', ticker: inner };
+  }
+  if (tipoMov.startsWith('Depósito de Fondos') || tipoMov.startsWith('Deposito de Fondos') || tipoMov === 'Crédito') {
+    return { tipo: 'deposito', ticker: 'EFECTIVO' };
+  }
+  if (tipoMov.startsWith('Extracción de Fondos') || tipoMov.startsWith('Extraccion de Fondos')) {
+    return { tipo: 'retiro', ticker: 'EFECTIVO' };
+  }
+  return null;
+}
+
+function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 'selected'>[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const table = doc.querySelector('table');
+  if (!table) throw new Error('No se encontró la tabla en el archivo IOL');
+
+  const allRows = Array.from(table.querySelectorAll('tr'));
+  if (!allRows.length) throw new Error('Tabla vacía');
+
+  const headers = Array.from(allRows[0].querySelectorAll('th,td')).map(td => td.textContent?.trim() || '');
+  const rawRows = allRows.slice(1).map(row => {
+    const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
+    return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? '']));
+  }).filter(r => r['Tipo Mov.']);
+
+  const groups = new Map<string, typeof rawRows>();
+  for (const row of rawRows) {
+    const key = (row['Nro. de Boleto'] && String(row['Nro. de Boleto']).trim() !== '0')
+      ? String(row['Nro. de Boleto']).trim()
+      : String(row['Nro. de Mov.']).trim();
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+
+  const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
+
+  for (const [boleto, rows] of groups) {
+    const tipoMov = rows[0]['Tipo Mov.'] || '';
+    const opInfo = parseIOLTipoMov(tipoMov);
+    if (!opInfo) continue;
+
+    const { tipo, ticker } = opInfo;
+    const esCash = tipo === 'deposito' || tipo === 'retiro';
+
+    let moneda: 'USD' | 'ARS' = 'ARS';
+    let monto_usd = 0;
+    let precio_unitario: number | null = null;
+    let cantidad: number | null = null;
+    let fecha = '';
+
+    if (esCash) {
+      const row = rows[0];
+      const montoARS = parseIOLMonto(row['Monto']);
+      if (!montoARS) continue;
+      monto_usd = montoARS / mep;
+      moneda = 'ARS';
+      fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
+    } else {
+      const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
+      const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
+
+      if (usdRow) {
+        moneda = 'USD';
+        monto_usd = parseIOLMonto(usdRow['Monto']);
+        precio_unitario = parseFloat(String(usdRow['Precio']).replace(',', '.')) || null;
+        cantidad = parseFloat(usdRow['Cant. titulos']) || null;
+        fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']);
+      } else if (arsRow) {
+        moneda = 'ARS';
+        const montoARS = parseIOLMonto(arsRow['Monto']);
+        monto_usd = montoARS / mep;
+        precio_unitario = parseFloat(String(arsRow['Precio']).replace(',', '.')) || null;
+        cantidad = parseFloat(arsRow['Cant. titulos']) || null;
+        fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']);
+      } else { continue; }
+    }
+
+    if (!monto_usd || !fecha) continue;
+
+    const esCashOp = tipo === 'deposito' || tipo === 'retiro';
+    result.push({
+      importId: `IOL-${boleto}`,
+      fecha,
+      ticker: esCashOp ? 'EFECTIVO' : ticker,
+      nombre: esCashOp ? (tipo === 'deposito' ? 'Depósito' : 'Retiro') : ticker,
+      tipo,
+      cantidad: esCashOp ? null : cantidad,
+      precio_unitario: esCashOp ? null : precio_unitario,
+      monto_usd,
+      moneda,
+      tipo_activo: esCashOp ? 'efectivo' : detectTipoActivo(ticker),
+      broker: 'IOL',
+      notas: null,
+    });
+  }
+
+  return result;
+}
+
+function parseXLSXDate(val: any): string {
+  if (!val) return '';
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  if (typeof val === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}/.test(val)) return val.split('T')[0];
+    if (/^\d{2}\/\d{2}\/\d{4}/.test(val)) { const [d, m, y] = val.split('/'); return `${y}-${m}-${d}`; }
+    return val;
+  }
+  if (typeof val === 'number') {
+    try {
+      const info = (XLSX.SSF as any).parse_date_code(val);
+      return `${info.y}-${String(info.m).padStart(2,'0')}-${String(info.d).padStart(2,'0')}`;
+    } catch { return ''; }
+  }
+  return '';
+}
+
+function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDuplicate' | 'selected'>[] {
+  const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: null });
+
+  const boletoGroups = new Map<string, any[]>();
+  const dividendRows: any[] = [];
+
+  for (const row of rows) {
+    const desc = String(row['Descripcion'] || '');
+    const bm = desc.match(/^Boleto\s*\/\s*(\d+)\s*\/\s*(COMPRA|VENTA)\s*\/[^/]*\/\s*([A-Z0-9.]+)/i);
+    if (bm) {
+      const key = bm[1];
+      if (!boletoGroups.has(key)) boletoGroups.set(key, []);
+      boletoGroups.get(key)!.push({ ...row, _tipo: bm[2].toLowerCase(), _ticker: bm[3] });
+      continue;
+    }
+    const dm = desc.match(/^Dividendo en efectivo\s*\/\s*(.+)/i);
+    if (dm) dividendRows.push({ ...row, _ticker: dm[1].trim() });
+  }
+
+  const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
+
+  for (const [boleto, rows] of boletoGroups) {
+    const { _tipo: tipo, _ticker: ticker } = rows[0];
+    const tipoInstr = rows[0]['Tipo de Instrumento'] || null;
+
+    const usdRow = rows.find(r => {
+      const m = String(r['Moneda'] || '');
+      return (m.includes('Dólar') || m.includes('Dollar')) && Math.abs(r['Importe'] || 0) > 0;
+    });
+    const arsRow = rows.find(r => String(r['Moneda'] || '').includes('Pesos') && Math.abs(r['Importe'] || 0) > 0);
+    const baseRow = usdRow || arsRow;
+    if (!baseRow) continue;
+
+    const esUSD = !!usdRow;
+    const importe = Math.abs((esUSD ? usdRow : arsRow)!['Importe'] || 0);
+    if (!importe) continue;
+
+    const monto_usd = esUSD ? importe : importe / mep;
+    const moneda: 'USD' | 'ARS' = esUSD ? 'USD' : 'ARS';
+    const cantidad = Math.abs(baseRow['Cantidad'] || 0) || null;
+    const precio = (baseRow['Precio'] > 0) ? baseRow['Precio'] : null;
+    const fecha = parseXLSXDate(baseRow['Concertacion']);
+    if (!fecha) continue;
+
+    result.push({
+      importId: `BAL-${boleto}`,
+      fecha, ticker, nombre: ticker,
+      tipo: tipo as any,
+      cantidad, precio_unitario: precio,
+      monto_usd, moneda,
+      tipo_activo: detectTipoActivo(ticker, tipoInstr),
+      broker: 'Balanz', notas: null,
+    });
+  }
+
+  const divGrouped = new Map<string, any[]>();
+  for (const row of dividendRows) {
+    const fecha = parseXLSXDate(row['Concertacion']);
+    const key = `${fecha}-${row['_ticker']}`;
+    if (!divGrouped.has(key)) divGrouped.set(key, []);
+    divGrouped.get(key)!.push(row);
+  }
+
+  for (const [key, rows] of divGrouped) {
+    const usdRow = rows.find(r => {
+      const m = String(r['Moneda'] || '');
+      return (m.includes('Dólar') || m.includes('Dollar')) && (r['Importe'] || 0) > 0;
+    });
+    if (!usdRow) continue;
+    const ticker = usdRow['_ticker'];
+    const fecha = parseXLSXDate(usdRow['Concertacion']);
+    const importe = usdRow['Importe'];
+    if (!fecha || !importe) continue;
+    result.push({
+      importId: `BAL-DIV-${key}`,
+      fecha, ticker, nombre: ticker,
+      tipo: 'dividendo',
+      cantidad: null, precio_unitario: null,
+      monto_usd: importe, moneda: 'USD',
+      tipo_activo: detectTipoActivo(ticker, usdRow['Tipo de Instrumento']),
+      broker: 'Balanz', notas: null,
+    });
+  }
+
+  return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
+function isDuplicateOp(op: Omit<OpImportada, 'isDuplicate' | 'selected'>, existing: Operacion[]): boolean {
+  return existing.some(e =>
+    e.fecha === op.fecha &&
+    e.ticker === op.ticker &&
+    e.tipo === op.tipo &&
+    e.monto_usd > 0 &&
+    Math.abs(e.monto_usd - op.monto_usd) / e.monto_usd < 0.03
+  );
+}
+
+// ─── Componentes UI base ──────────────────────────────────────────────────────
+
 function MetricaCard({ label, value, sub, subColor, valueColor, accent, small }: { label: string; value: string; sub?: string; subColor?: string; valueColor?: string; accent?: boolean; small?: boolean }) {
   return (
     <div className="card" style={{ borderColor: accent ? 'rgba(124,58,237,0.4)' : undefined }}>
@@ -128,6 +412,8 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
     </div>
   );
 }
+
+// ─── Tab: Posiciones ──────────────────────────────────────────────────────────
 
 function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionCompleta[]; efectivoUSD: number }) {
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
@@ -195,6 +481,8 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
   );
 }
 
+// ─── Tab: Mapa ────────────────────────────────────────────────────────────────
+
 function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
   const data = posiciones.filter(p => p.valorActualUSD != null && p.valorActualUSD > 0).map(p => ({ name: p.ticker, value: p.valorActualUSD!, pnlPct: p.pnlPct ?? 0 })).sort((a, b) => b.value - a.value);
   if (!data.length) return <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>No hay posiciones con valor calculado.</div>;
@@ -234,6 +522,8 @@ function TabMapa({ posiciones }: { posiciones: PosicionCompleta[] }) {
   );
 }
 
+// ─── Tab: Distribución ────────────────────────────────────────────────────────
+
 function TabDistribucion({ posiciones, efectivoUSD }: { posiciones: PosicionCompleta[]; efectivoUSD: number }) {
   const valorTotalUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0) + efectivoUSD;
   const byTicker = [...posiciones.filter(p => p.valorActualUSD != null).map(p => ({ name: p.ticker, value: p.valorActualUSD! })).sort((a, b) => b.value - a.value), ...(efectivoUSD > 0 ? [{ name: 'Liquidez', value: efectivoUSD }] : [])];
@@ -246,6 +536,8 @@ function TabDistribucion({ posiciones, efectivoUSD }: { posiciones: PosicionComp
     </div>
   );
 }
+
+// ─── Tab: Performance ─────────────────────────────────────────────────────────
 
 function TabPerformance({ posiciones }: { posiciones: PosicionCompleta[] }) {
   const sorted = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
@@ -267,6 +559,8 @@ function TabPerformance({ posiciones }: { posiciones: PosicionCompleta[] }) {
   );
 }
 
+// ─── Tab: Historial ───────────────────────────────────────────────────────────
+
 function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Operacion[]; mep: number; valorActualIol: number }) {
   const [datos, setDatos] = useState<{ fecha: string; valor: number; invertido: number; rendimiento: number }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,9 +572,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
       try {
         const compras = operaciones.filter(o => o.tipo === 'compra');
         if (!compras.length) { setLoading(false); return; }
-
         const tickers = Array.from(new Set(compras.map(o => o.ticker)));
-
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
         await Promise.all(tickers.map(async ticker => {
           try {
@@ -290,9 +582,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
             if (!data.error && data.historico?.length) historicos[ticker] = data.historico;
           } catch {}
         }));
-
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
-
         const basePrices: Record<string, number> = {};
         for (const ticker of tickers) {
           const h = historicos[ticker];
@@ -302,17 +592,14 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
           const precioBase = h.filter(p => p.fecha <= primeraCompra.fecha).at(-1)?.cierre || h.find(p => p.fecha >= primeraCompra.fecha)?.cierre;
           if (precioBase) basePrices[ticker] = precioBase;
         }
-
         const primeraFecha = compras.sort((a, b) => a.fecha.localeCompare(b.fecha))[0].fecha;
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h => h.forEach(p => allDates.add(p.fecha)));
         const sortedDates = Array.from(allDates).sort().filter(d => d >= primeraFecha);
-
         const puntos = sortedDates.map(fecha => {
           const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
           const posMap = calcularPosicionesBase(opsUpTo);
           let valor = 0;
-
           for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
             const basePrice = basePrices[pos.ticker];
@@ -321,14 +608,11 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
             if (!precioFecha) { valor += pos.costoTotalUSD; continue; }
             valor += pos.costoTotalUSD * (precioFecha / basePrice);
           }
-
           valor += Math.max(0, calcularEfectivoUSD(opsUpTo));
           const invertido = opsUpTo.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
           const rendimiento = invertido > 0 ? +((valor - invertido) / invertido * 100).toFixed(2) : 0;
           return { fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento };
         }).filter(p => p.valor > 0);
-
-        // Anclar el último punto al valor real de IOL y escalar toda la curva proporcionalmente
         if (puntos.length > 0 && valorActualIol > 0) {
           const ultimoValor = puntos[puntos.length - 1].valor;
           if (ultimoValor > 0) {
@@ -339,31 +623,18 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
             });
           }
         }
-
-        // Punto cero un día antes de la primera compra
         const diaAntes = new Date(primeraFecha + 'T12:00:00');
         diaAntes.setDate(diaAntes.getDate() - 1);
         const zeroPt = { fecha: diaAntes.toISOString().split('T')[0], valor: 0, invertido: 0, rendimiento: 0 };
         setDatos([zeroPt, ...puntos]);
-
       } catch { setError('Error al cargar los datos históricos.'); }
       setLoading(false);
     };
     build();
   }, [operaciones, mep, valorActualIol]);
 
-  if (loading) return (
-    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
-      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div>
-      <div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div>
-    </div>
-  );
-
-  if (error || datos.length <= 1) return (
-    <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
-      <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div>
-    </div>
-  );
+  if (loading) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div><div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div></div>;
+  if (error || datos.length <= 1) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div></div>;
 
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
   const fin = datos[datos.length - 1];
@@ -371,13 +642,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
   const primerPuntoReal = datos.find(p => p.valor > 0);
   const variacionCapital = primerPuntoReal && primerPuntoReal.valor > 0 ? ((fin.valor - primerPuntoReal.valor) / primerPuntoReal.valor * 100) : 0;
   const primeraCompraFecha = operaciones.filter(o => o.tipo === 'compra').sort((a, b) => a.fecha.localeCompare(b.fecha))[0]?.fecha;
-
-  const xAxisProps = {
-    dataKey: 'fecha',
-    tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' },
-    tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; },
-    interval: 'preserveStartEnd' as const,
-  };
+  const xAxisProps = { dataKey: 'fecha', tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }, tickFormatter: (v: string) => { const d = new Date(v + 'T00:00:00'); return `${d.toLocaleString('es-AR', { month: 'short' })} ${d.getFullYear().toString().slice(2)}`; }, interval: 'preserveStartEnd' as const };
   const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
   const labelFmt = (v: string) => new Date(v + 'T00:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 
@@ -388,13 +653,9 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
         <MetricaCard label="VARIACIÓN PERÍODO" small value={(variacionCapital >= 0 ? '+' : '') + variacionCapital.toFixed(1) + '%'} valueColor={colorV(variacionCapital)} sub="Desde primera compra" />
         <MetricaCard label="PRIMERA INVERSIÓN" small value={primeraCompraFecha ? new Date(primeraCompraFecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'} sub="Fecha de inicio del portfolio" />
       </div>
-
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div>
-            <div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Anclado al valor actual de IOL · tendencia basada en el subyacente</div>
-          </div>
+          <div><div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Anclado al valor actual de IOL · tendencia basada en el subyacente</div></div>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '0', borderTop: '2px dashed #06b6d4' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Invertido</span></div>
@@ -404,24 +665,17 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
             <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
-            <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} name="valor" />
-            <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="invertido" />
+            <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" />
           </LineChart>
         </ResponsiveContainer>
       </div>
-
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div>
-            <div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div>
-            <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div>
-          </div>
+          <div><div className="label-xs" style={{ marginBottom: '4px' }}>📈 Evolución del rendimiento</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Retorno porcentual acumulado sobre capital invertido</div></div>
+          <div style={{ textAlign: 'right' }}><div style={{ fontFamily: 'DM Mono, monospace', fontSize: '20px', fontWeight: 700, color: colorV(rendimientoActual) }}>{rendimientoActual >= 0 ? '+' : ''}{rendimientoActual.toFixed(2)}%</div><div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento actual</div></div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
@@ -429,7 +683,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
             <XAxis {...xAxisProps} />
             <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`} width={55} />
             <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']} labelFormatter={labelFmt} />
-            <Line type="monotone" dataKey="rendimiento" stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} name="rendimiento" />
+            <Line type="monotone" dataKey="rendimiento" stroke={rendimientoActual >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -437,13 +691,20 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
   );
 }
 
-function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; onDelete: (id: string) => void }) {
+// ─── Tab: Operaciones ─────────────────────────────────────────────────────────
+
+function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Operacion[]; onDelete: (id: string) => void; onImport: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-        <div className="label-xs">📝 Historial de operaciones</div>
-        <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>{operaciones.length} operaciones registradas</div>
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div className="label-xs">📝 Historial de operaciones</div>
+          <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>{operaciones.length} operaciones registradas</div>
+        </div>
+        <button onClick={onImport} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+          <Upload size={14} /> Importar CSV
+        </button>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
@@ -484,6 +745,8 @@ function TabOperaciones({ operaciones, onDelete }: { operaciones: Operacion[]; o
   );
 }
 
+// ─── Modal: Agregar operación ─────────────────────────────────────────────────
+
 function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => void; onSave: (op: any) => Promise<void> }) {
   const [tipo, setTipo] = useState<'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro'>('compra');
   const [ticker, setTicker] = useState('');
@@ -515,14 +778,11 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
     if (monto_usd <= 0) return;
     setSaving(true);
     await onSave({
-      fecha,
-      ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO',
+      fecha, ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO',
       nombre: isAssetOp ? ticker.toUpperCase().trim() : tipo === 'dividendo' ? ticker.toUpperCase().trim() : (tipo === 'deposito' ? 'Depósito' : 'Retiro'),
-      tipo,
-      cantidad: isAssetOp ? parseFloat(cantidad) || null : null,
+      tipo, cantidad: isAssetOp ? parseFloat(cantidad) || null : null,
       precio_unitario: isAssetOp ? parseFloat(precioUnitario) || null : null,
-      monto_usd, moneda,
-      tipo_activo: isAssetOp ? tipoActivo : 'efectivo',
+      monto_usd, moneda, tipo_activo: isAssetOp ? tipoActivo : 'efectivo',
       broker: broker || null, notas: notas || null,
     });
     setSaving(false);
@@ -537,7 +797,6 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Agregar operación</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
         </div>
-
         <div style={{ marginBottom: '16px' }}>
           <div className="label-xs" style={ls}>Tipo de operación</div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -546,78 +805,25 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
             ))}
           </div>
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <div className="label-xs" style={ls}>Fecha</div>
-            <input className="input-field" type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
-          </div>
-
-          {(isAssetOp || tipo === 'dividendo') && (
-            <div style={{ gridColumn: '1 / -1' }}>
-              <div className="label-xs" style={ls}>Ticker</div>
-              <input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} />
+          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Fecha</div><input className="input-field" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
+          {(isAssetOp || tipo === 'dividendo') && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Ticker</div><input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /></div>)}
+          {isAssetOp && (<>
+            <div><div className="label-xs" style={ls}>Cantidad</div><input className="input-field" type="number" placeholder="0" value={cantidad} onChange={e => setCantidad(e.target.value)} min="0" step="any" /></div>
+            <div><div className="label-xs" style={ls}>Precio unitario</div><input className="input-field" type="number" placeholder="0.00" value={precioUnitario} onChange={e => setPrecioUnitario(e.target.value)} min="0" step="any" /></div>
+            <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Tipo de activo</div>
+              <select className="input-field" value={tipoActivo} onChange={e => setTipoActivo(e.target.value)} style={{ cursor: 'pointer' }}>
+                <option value="cedear">CEDEAR</option><option value="accion_ar">Acción Argentina</option><option value="bono">Bono Soberano</option><option value="on">Obligación Negociable</option><option value="etf">ETF</option><option value="crypto">Crypto</option><option value="otro">Otro</option>
+              </select>
             </div>
-          )}
-
-          {isAssetOp && (
-            <>
-              <div>
-                <div className="label-xs" style={ls}>Cantidad</div>
-                <input className="input-field" type="number" placeholder="0" value={cantidad} onChange={e => setCantidad(e.target.value)} min="0" step="any" />
-              </div>
-              <div>
-                <div className="label-xs" style={ls}>Precio unitario</div>
-                <input className="input-field" type="number" placeholder="0.00" value={precioUnitario} onChange={e => setPrecioUnitario(e.target.value)} min="0" step="any" />
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <div className="label-xs" style={ls}>Tipo de activo</div>
-                <select className="input-field" value={tipoActivo} onChange={e => setTipoActivo(e.target.value)} style={{ cursor: 'pointer' }}>
-                  <option value="cedear">CEDEAR</option>
-                  <option value="accion_ar">Acción Argentina</option>
-                  <option value="bono">Bono Soberano</option>
-                  <option value="on">Obligación Negociable</option>
-                  <option value="etf">ETF</option>
-                  <option value="crypto">Crypto</option>
-                  <option value="otro">Otro</option>
-                </select>
-              </div>
-            </>
-          )}
-
-          {isCashOp && (
-            <div style={{ gridColumn: '1 / -1' }}>
-              <div className="label-xs" style={ls}>Monto</div>
-              <input className="input-field" type="number" placeholder="0.00" value={montoDirecto} onChange={e => setMontoDirecto(e.target.value)} min="0" step="any" />
-            </div>
-          )}
-
-          <div>
-            <div className="label-xs" style={ls}>Moneda</div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              {['USD','ARS'].map(m => (
-                <button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="label-xs" style={ls}>Broker</div>
-            <input className="input-field" placeholder="IOL, Balanz, Cocos..." value={broker} onChange={e => setBroker(e.target.value)} />
-          </div>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <div className="label-xs" style={ls}>Notas (opcional)</div>
-            <input className="input-field" placeholder="Observaciones..." value={notas} onChange={e => setNotas(e.target.value)} />
-          </div>
+          </>)}
+          {isCashOp && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Monto</div><input className="input-field" type="number" placeholder="0.00" value={montoDirecto} onChange={e => setMontoDirecto(e.target.value)} min="0" step="any" /></div>)}
+          <div><div className="label-xs" style={ls}>Moneda</div><div style={{ display: 'flex', gap: '6px' }}>{['USD','ARS'].map(m => (<button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>))}</div></div>
+          <div><div className="label-xs" style={ls}>Broker</div><input className="input-field" placeholder="IOL, Balanz, Cocos..." value={broker} onChange={e => setBroker(e.target.value)} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Notas (opcional)</div><input className="input-field" placeholder="Observaciones..." value={notas} onChange={e => setNotas(e.target.value)} /></div>
         </div>
-
-        {montoUSDPreview > 0 && (
-          <div style={{ marginTop: '14px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Equivalente en USD</span>
-            <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '15px', fontWeight: 600, color: 'var(--violet-light)' }}>{fmtUSD(montoUSDPreview)}</span>
-          </div>
-        )}
+        {montoUSDPreview > 0 && (<div style={{ marginTop: '14px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Equivalente en USD</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '15px', fontWeight: 600, color: 'var(--violet-light)' }}>{fmtUSD(montoUSDPreview)}</span></div>)}
         {moneda === 'ARS' && <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Conversión usando MEP actual: ${mep.toLocaleString('es-AR')}</div>}
-
         <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
           <button onClick={onClose} style={{ flex: 1, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '14px' }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving || !canSave} className="btn-primary" style={{ flex: 2, padding: '10px', fontSize: '14px' }}>{saving ? 'Guardando...' : 'Guardar operación'}</button>
@@ -627,16 +833,217 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
   );
 }
 
-function EmptyState({ onAdd }: { onAdd: () => void }) {
+// ─── Modal: Importar desde broker ─────────────────────────────────────────────
+
+type BrokerType = 'IOL' | 'Balanz';
+
+function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: {
+  operacionesExistentes: Operacion[];
+  mep: number;
+  onClose: () => void;
+  onImport: (ops: Omit<Operacion, 'id'>[]) => Promise<void>;
+}) {
+  const [broker, setBroker] = useState<BrokerType>('IOL');
+  const [ops, setOps] = useState<OpImportada[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = useCallback(async (file: File) => {
+    setLoading(true); setError(''); setOps([]);
+    try {
+      let parsed: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
+      if (broker === 'IOL') {
+        const text = await file.text();
+        parsed = parseIOL(text, mep);
+      } else {
+        const buffer = await file.arrayBuffer();
+        parsed = parseBalanz(buffer, mep);
+      }
+      if (!parsed.length) { setError('No se encontraron operaciones de compra, venta o dividendo en el archivo.'); setLoading(false); return; }
+      const withFlags = parsed.map(op => ({
+        ...op,
+        isDuplicate: isDuplicateOp(op, operacionesExistentes),
+        selected: !isDuplicateOp(op, operacionesExistentes),
+      }));
+      setOps(withFlags);
+    } catch (e: any) {
+      setError(e?.message || `Error al leer el archivo. Verificá que sea el formato correcto de ${broker}.`);
+    }
+    setLoading(false);
+  }, [broker, mep, operacionesExistentes]);
+
+  const toggleAll = (val: boolean) => setOps(prev => prev.map(o => ({ ...o, selected: o.isDuplicate ? false : val })));
+  const toggleOne = (id: string) => setOps(prev => prev.map(o => o.importId === id && !o.isDuplicate ? { ...o, selected: !o.selected } : o));
+
+  const selectedOps = ops.filter(o => o.selected);
+  const dupCount = ops.filter(o => o.isDuplicate).length;
+  const newCount = ops.filter(o => !o.isDuplicate).length;
+
+  const handleSave = async () => {
+    if (!selectedOps.length) return;
+    setSaving(true);
+    try {
+      const toSave = selectedOps.map(({ importId, isDuplicate, selected, ...op }) => op);
+      await onImport(toSave);
+      setSaved(true);
+    } catch { setError('Error al guardar las operaciones.'); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div className="card" style={{ width: '100%', maxWidth: '820px', maxHeight: '92vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <div>
+            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Importar desde broker</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>Compras, ventas y dividendos. Las cauciones se ignoran automáticamente.</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
+        </div>
+
+        {saved ? (
+          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <CheckCircle2 size={48} color="var(--green)" style={{ margin: '0 auto 16px' }} />
+            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)', marginBottom: '8px' }}>¡Importación exitosa!</div>
+            <div style={{ fontSize: '13px', color: 'var(--muted)' }}>{selectedOps.length} operaciones importadas desde {broker}.</div>
+            <button onClick={onClose} className="btn-primary" style={{ marginTop: '24px', padding: '10px 32px' }}>Cerrar</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <div className="label-xs" style={{ marginBottom: '8px' }}>Broker</div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['IOL', 'Balanz'] as BrokerType[]).map(b => (
+                    <button key={b} onClick={() => { setBroker(b); setOps([]); setError(''); }} style={{ flex: 1, background: broker === b ? 'var(--violet)' : 'var(--surface2)', color: broker === b ? '#fff' : 'var(--text2)', border: `1px solid ${broker === b ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', transition: 'all 0.15s' }}>{b}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="label-xs" style={{ marginBottom: '8px' }}>Archivo {broker === 'IOL' ? '(.xls exportado de IOL)' : '(.xlsx exportado de Balanz)'}</div>
+                <button onClick={() => fileRef.current?.click()} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+                  <Upload size={15} /> Seleccionar archivo
+                </button>
+                <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
+              </div>
+            </div>
+
+            {!ops.length && !loading && !error && (
+              <div style={{ padding: '20px', background: 'var(--surface2)', borderRadius: '10px', marginBottom: '16px' }}>
+                <div className="label-xs" style={{ marginBottom: '10px' }}>¿Cómo exportar?</div>
+                {broker === 'IOL'
+                  ? <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En IOL: <strong style={{ color: 'var(--text)' }}>Mis inversiones → Movimientos → Exportar XLS</strong>. El archivo incluye todas las operaciones del período seleccionado.</div>
+                  : <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En Balanz: <strong style={{ color: 'var(--text)' }}>Mi cuenta → Movimientos → Descargar Excel</strong>. Seleccioná el rango de fechas y descargá el .xlsx.</div>
+                }
+              </div>
+            )}
+
+            {loading && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Procesando archivo...</div>}
+
+            {error && (
+              <div style={{ padding: '12px 16px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)', borderRadius: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <AlertCircle size={16} color="var(--red)" style={{ flexShrink: 0, marginTop: '1px' }} />
+                <div style={{ fontSize: '13px', color: 'var(--red)', fontFamily: 'DM Mono, monospace' }}>{error}</div>
+              </div>
+            )}
+
+            {ops.length > 0 && (
+              <>
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                  <div style={{ padding: '8px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <CheckCircle2 size={14} color="var(--green)" />
+                    <span style={{ fontSize: '13px', color: 'var(--green)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{newCount} nuevas</span>
+                  </div>
+                  {dupCount > 0 && (
+                    <div style={{ padding: '8px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={14} color="var(--amber)" />
+                      <span style={{ fontSize: '13px', color: 'var(--amber)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{dupCount} posibles duplicados</span>
+                    </div>
+                  )}
+                  <div style={{ padding: '8px 14px', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '13px', color: 'var(--violet-light)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{selectedOps.length} seleccionadas</span>
+                  </div>
+                </div>
+
+                <div style={{ borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', marginBottom: '16px' }}>
+                  <div style={{ padding: '10px 16px', background: 'var(--surface2)', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--border)' }}>
+                    <input type="checkbox" checked={selectedOps.length === newCount && newCount > 0} onChange={e => toggleAll(e.target.checked)} style={{ width: '15px', height: '15px', cursor: 'pointer', accentColor: 'var(--violet)' }} />
+                    <span style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Seleccionar todas las nuevas</span>
+                  </div>
+                  <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
+                      <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                          {['','Fecha','Tipo','Ticker','Cantidad','Precio','Monto USD','Moneda','Estado'].map(h => (
+                            <th key={h} style={{ padding: '8px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === '' ? 'center' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ops.map(op => (
+                          <tr key={op.importId} onClick={() => toggleOne(op.importId)} style={{ borderBottom: '1px solid var(--border)', background: op.isDuplicate ? 'rgba(245,158,11,0.03)' : op.selected ? 'rgba(124,58,237,0.04)' : 'transparent', cursor: op.isDuplicate ? 'default' : 'pointer', opacity: op.isDuplicate ? 0.6 : 1 }}>
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                              <input type="checkbox" checked={op.selected} disabled={op.isDuplicate} onChange={() => toggleOne(op.importId)} style={{ width: '14px', height: '14px', cursor: op.isDuplicate ? 'default' : 'pointer', accentColor: 'var(--violet)' }} onClick={e => e.stopPropagation()} />
+                            </td>
+                            <td style={{ padding: '8px 12px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{new Date(op.fecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: '2-digit' })}</td>
+                            <td style={{ padding: '8px 12px' }}><span style={{ color: TIPO_COLORS_OP[op.tipo] || 'var(--text)', fontWeight: 600, textTransform: 'capitalize' }}>{op.tipo}</span></td>
+                            <td style={{ padding: '8px 12px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)' }}>{op.ticker}</td>
+                            <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{op.cantidad != null ? fmtNum(op.cantidad, 2) : '—'}</td>
+                            <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{op.precio_unitario != null ? (op.moneda === 'ARS' ? fmtARS(op.precio_unitario) : fmtUSD(op.precio_unitario)) : '—'}</td>
+                            <td style={{ padding: '8px 12px', color: 'var(--text)', fontWeight: 600 }}>{fmtUSD(op.monto_usd)}</td>
+                            <td style={{ padding: '8px 12px', color: 'var(--muted2)' }}>{op.moneda}</td>
+                            <td style={{ padding: '8px 12px' }}>
+                              {op.isDuplicate
+                                ? <span style={{ fontSize: '10px', color: 'var(--amber)', background: 'rgba(245,158,11,0.12)', borderRadius: '4px', padding: '2px 6px' }}>duplicado</span>
+                                : <span style={{ fontSize: '10px', color: 'var(--green)', background: 'rgba(34,197,94,0.12)', borderRadius: '4px', padding: '2px 6px' }}>nueva</span>
+                              }
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '16px' }}>
+                  * Las operaciones en ARS se convirtieron a USD usando el MEP actual (${mep.toLocaleString('es-AR')}). Podés editar los montos manualmente después de importar.
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={onClose} style={{ flex: 1, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '14px' }}>Cancelar</button>
+                  <button onClick={handleSave} disabled={saving || !selectedOps.length} className="btn-primary" style={{ flex: 2, padding: '10px', fontSize: '14px' }}>
+                    {saving ? 'Importando...' : `Importar ${selectedOps.length} operación${selectedOps.length !== 1 ? 'es' : ''}`}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────────
+
+function EmptyState({ onAdd, onImport }: { onAdd: () => void; onImport: () => void }) {
   return (
     <div className="card" style={{ textAlign: 'center', padding: '60px 40px' }}>
       <div style={{ fontSize: '40px', marginBottom: '16px' }}>💼</div>
       <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)', marginBottom: '8px' }}>Tu portfolio está vacío</div>
-      <div style={{ fontSize: '13px', color: 'var(--muted2)', maxWidth: '400px', margin: '0 auto 24px' }}>Agregá tus operaciones de compra y venta para ver el análisis completo de tu cartera.</div>
-      <button onClick={onAdd} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px' }}><Plus size={16} /> Agregar primera operación</button>
+      <div style={{ fontSize: '13px', color: 'var(--muted2)', maxWidth: '400px', margin: '0 auto 24px' }}>Agregá operaciones manualmente o importá directamente desde IOL o Balanz.</div>
+      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        <button onClick={onAdd} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px' }}><Plus size={16} /> Agregar operación</button>
+        <button onClick={onImport} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '10px 24px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '14px' }}><Upload size={16} /> Importar desde broker</button>
+      </div>
     </div>
   );
 }
+
+// ─── Página principal ─────────────────────────────────────────────────────────
 
 type Tab = 'posiciones' | 'mapa' | 'distribucion' | 'performance' | 'historial' | 'operaciones';
 
@@ -648,6 +1055,7 @@ export default function PortfolioPage() {
   const [mep, setMep] = useState(1430);
   const [tab, setTab] = useState<Tab>('posiciones');
   const [showModal, setShowModal] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [efectivoUSD, setEfectivoUSD] = useState(0);
   const [totalInvertidoUSD, setTotalInvertidoUSD] = useState(0);
   const [xirr, setXirr] = useState<number | null>(null);
@@ -670,13 +1078,11 @@ export default function PortfolioPage() {
     const efectivo = calcularEfectivoUSD(ops);
     setTotalInvertidoUSD(totalInv);
     setEfectivoUSD(efectivo);
-
     const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({
       ...pos, costoPromedioUSD: pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0,
       precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null, loadingPrecio: true,
     }));
     setPosiciones([...posArray]);
-
     const results = await Promise.all(posArray.map(async (pos, idx) => {
       const { precioUSD, precioOriginal, moneda, variacion } = await fetchPrecio(pos.ticker, mepRate);
       const valorActualUSD = precioUSD != null ? precioUSD * pos.cantidad : null;
@@ -684,7 +1090,6 @@ export default function PortfolioPage() {
       const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
       return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion };
     }));
-
     const completed = posArray.map((pos, idx) => {
       const r = results.find(x => x.idx === idx);
       if (!r) return { ...pos, loadingPrecio: false };
@@ -704,6 +1109,16 @@ export default function PortfolioPage() {
   }, [mep, loadOperaciones, buildPositions]);
 
   useEffect(() => { loadData(); }, [mep]);
+
+  const handleImport = async (ops: Omit<Operacion, 'id'>[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Sesión expirada');
+    const rows = ops.map(op => ({ ...op, user_id: user.id }));
+    const { error } = await supabase.from('operaciones').insert(rows);
+    if (error) throw new Error(error.message);
+    setShowImport(false);
+    await loadData(true);
+  };
 
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
@@ -728,6 +1143,9 @@ export default function PortfolioPage() {
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Vista consolidada de posiciones, liquidez y rendimiento.</div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={() => setShowImport(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>
+            <Upload size={14} /> Importar
+          </button>
           <button onClick={() => loadData(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}>
             <RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} /> Actualizar
           </button>
@@ -737,7 +1155,9 @@ export default function PortfolioPage() {
         </div>
       </div>
 
-      {operaciones.length === 0 ? <EmptyState onAdd={() => setShowModal(true)} /> : (
+      {operaciones.length === 0 ? (
+        <EmptyState onAdd={() => setShowModal(true)} onImport={() => setShowImport(true)} />
+      ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '12px' }}>
             <MetricaCard label="CAPITAL ACTUAL" value={fmtUSD(valorTotalUSD)} sub={`Hoy ${variacionHoy >= 0 ? '+' : ''}${fmtUSD(variacionHoy)} (${fmtPct(variacionHoyPct)})`} subColor={colorV(variacionHoyPct)} accent />
@@ -753,30 +1173,13 @@ export default function PortfolioPage() {
 
           {(mejorActivo || peorActivo) && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
-              {mejorActivo && (
-                <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'rgba(34,197,94,0.2)' }}>
-                  <TrendingUp size={20} color="var(--green)" />
-                  <div><div className="label-xs" style={{ marginBottom: '2px' }}>MEJOR ACTIVO</div><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--green)', marginRight: '8px' }}>{mejorActivo.ticker}</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: 'var(--green)' }}>{fmtPct(mejorActivo.pnlPct)}</span></div>
-                </div>
-              )}
-              {peorActivo && peorActivo.ticker !== mejorActivo?.ticker && (
-                <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'rgba(244,63,94,0.2)' }}>
-                  <TrendingDown size={20} color="var(--red)" />
-                  <div><div className="label-xs" style={{ marginBottom: '2px' }}>PEOR ACTIVO</div><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--red)', marginRight: '8px' }}>{peorActivo.ticker}</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: colorV(peorActivo.pnlPct) }}>{fmtPct(peorActivo.pnlPct)}</span></div>
-                </div>
-              )}
+              {mejorActivo && (<div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'rgba(34,197,94,0.2)' }}><TrendingUp size={20} color="var(--green)" /><div><div className="label-xs" style={{ marginBottom: '2px' }}>MEJOR ACTIVO</div><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--green)', marginRight: '8px' }}>{mejorActivo.ticker}</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: 'var(--green)' }}>{fmtPct(mejorActivo.pnlPct)}</span></div></div>)}
+              {peorActivo && peorActivo.ticker !== mejorActivo?.ticker && (<div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'rgba(244,63,94,0.2)' }}><TrendingDown size={20} color="var(--red)" /><div><div className="label-xs" style={{ marginBottom: '2px' }}>PEOR ACTIVO</div><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--red)', marginRight: '8px' }}>{peorActivo.ticker}</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: colorV(peorActivo.pnlPct) }}>{fmtPct(peorActivo.pnlPct)}</span></div></div>)}
             </div>
           )}
 
           <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', overflowX: 'auto' }}>
-            {[
-              { key: 'posiciones' as Tab,   label: 'Posiciones',   icon: '📋' },
-              { key: 'mapa' as Tab,         label: 'Mapa',          icon: '🗺️' },
-              { key: 'distribucion' as Tab, label: 'Distribución',  icon: '🥧' },
-              { key: 'performance' as Tab,  label: 'Performance',   icon: '🏆' },
-              { key: 'historial' as Tab,    label: 'Historial',     icon: '📈' },
-              { key: 'operaciones' as Tab,  label: 'Operaciones',   icon: '📝' },
-            ].map(t => (
+            {[{ key: 'posiciones' as Tab, label: 'Posiciones', icon: '📋' },{ key: 'mapa' as Tab, label: 'Mapa', icon: '🗺️' },{ key: 'distribucion' as Tab, label: 'Distribución', icon: '🥧' },{ key: 'performance' as Tab, label: 'Performance', icon: '🏆' },{ key: 'historial' as Tab, label: 'Historial', icon: '📈' },{ key: 'operaciones' as Tab, label: 'Operaciones', icon: '📝' }].map(t => (
               <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
                 <span>{t.icon}</span> {t.label}
               </button>
@@ -788,20 +1191,27 @@ export default function PortfolioPage() {
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'performance'  && <TabPerformance posiciones={posiciones} />}
           {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} valorActualIol={valorTotalUSD} />}
-          {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} />}
+          {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} onImport={() => setShowImport(true)} />}
         </>
       )}
 
       {showModal && (
-        <ModalAgregarOp mep={mep} onClose={() => setShowModal(false)}
-          onSave={async (op) => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) { alert('Sesión expirada.'); return; }
-            const { error } = await supabase.from('operaciones').insert({ ...op, user_id: user.id });
-            if (error) { alert('Error: ' + error.message); return; }
-            setShowModal(false);
-            await loadData(true);
-          }}
+        <ModalAgregarOp mep={mep} onClose={() => setShowModal(false)} onSave={async (op) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) { alert('Sesión expirada.'); return; }
+          const { error } = await supabase.from('operaciones').insert({ ...op, user_id: user.id });
+          if (error) { alert('Error: ' + error.message); return; }
+          setShowModal(false);
+          await loadData(true);
+        }} />
+      )}
+
+      {showImport && (
+        <ModalImportarBroker
+          operacionesExistentes={operaciones}
+          mep={mep}
+          onClose={() => setShowImport(false)}
+          onImport={handleImport}
         />
       )}
     </div>
