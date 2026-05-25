@@ -66,13 +66,61 @@ function pnlColor(pct: number | null): string {
   return '#991b1b';
 }
 
+function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}): GananciaRealizada[] {
+  const bases = new Map<string, { costoTotal: number; cantidad: number; nombre: string; tipo_activo: string }>();
+  const realizadasMap = new Map<string, GananciaRealizada>();
+
+  for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
+    const key = normalizarTicker(op.ticker);
+    if (!bases.has(key)) bases.set(key, { costoTotal: 0, cantidad: 0, nombre: op.nombre || key, tipo_activo: op.tipo_activo || 'otro' });
+    const base = bases.get(key)!;
+    if (op.tipo === 'compra') {
+      base.costoTotal += op.monto_usd;
+      base.cantidad += (op.cantidad || 0);
+    } else if (op.tipo === 'venta' && base.cantidad > 0) {
+      const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
+      const pct = cantVendida / base.cantidad;
+      const costoVendido = base.costoTotal * pct;
+      const ganancia = op.monto_usd - costoVendido;
+      if (!realizadasMap.has(key)) {
+        realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
+      }
+      const real = realizadasMap.get(key)!;
+      real.montoVentaUSD += op.monto_usd;
+      real.costoRealizadoUSD += costoVendido;
+      real.gananciaUSD += ganancia;
+      real.cantidadVendida += cantVendida;
+      base.costoTotal -= costoVendido;
+      base.cantidad -= cantVendida;
+    }
+  }
+
+  // Activos con posición remanente que ya vencieron → realizadas automáticamente
+  const hoy = new Date();
+  for (const [key, base] of Array.from(bases.entries())) {
+    if (base.cantidad <= 0.000001) continue;
+    const venc = vencimientosMap[key];
+    if (venc && new Date(venc) < hoy) {
+      if (!realizadasMap.has(key)) {
+        realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: base.costoTotal, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: base.cantidad, vencido: true });
+      }
+      realizadasMap.get(key)!.vencido = true;
+    }
+  }
+
+  return Array.from(realizadasMap.values())
+    .map(r => ({ ...r, gananciaPct: r.costoRealizadoUSD > 0 ? (r.gananciaUSD / r.costoRealizadoUSD) * 100 : 0 }))
+    .sort((a, b) => b.gananciaUSD - a.gananciaUSD);
+}
+
 function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
-    if (!map.has(op.ticker)) {
-      map.set(op.ticker, { ticker: op.ticker, nombre: op.nombre || op.ticker, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
+    const tickerKey = normalizarTicker(op.ticker);
+    if (!map.has(tickerKey)) {
+      map.set(tickerKey, { ticker: tickerKey, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
     }
-    const pos = map.get(op.ticker)!;
+    const pos = map.get(tickerKey)!;
     if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
     else if (op.tipo === 'venta' && pos.cantidad > 0) {
       const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
@@ -95,18 +143,18 @@ function calcularEfectivoUSD(ops: Operacion[]): number {
   return Math.max(0, e);
 }
 
-async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: number | null; precioOriginal: number | null; moneda: string; variacion: number | null }> {
+async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: number | null; precioOriginal: number | null; moneda: string; variacion: number | null; vencimiento: string | null }> {
   try {
     const res = await fetch(`/api/buscar?ticker=${ticker}`);
     const data = await res.json();
-    if (data.error) return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null };
+    if (data.error) return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null, vencimiento: null };
     let precioOriginal: number | null = null, moneda = 'USD', variacion: number | null = null;
     if (data.tipo === 'cedear') { precioOriginal = data.precio?.valor ?? null; moneda = data.precio?.moneda || 'ARS'; variacion = data.precio?.variacion ?? null; }
     else if (data.tipo === 'renta_variable') { precioOriginal = data.precio ?? null; moneda = data.monedaLabel || 'USD'; variacion = data.variacion ?? null; }
     else if (data.tipo === 'renta_fija') { precioOriginal = data.precio?.valor ?? null; moneda = data.monedaLabel || 'USD'; variacion = data.precio?.variacion ?? null; }
     const precioUSD = precioOriginal != null ? (moneda === 'ARS' ? precioOriginal / mep : precioOriginal) : null;
-    return { precioUSD, precioOriginal, moneda, variacion };
-  } catch { return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null }; }
+    return { precioUSD, precioOriginal, moneda, variacion, vencimiento: data.spec?.vencimiento || null };
+  } catch { return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null, vencimiento: null }; }
 }
 
 // ─── Parsers de importación ───────────────────────────────────────────────────
@@ -539,22 +587,82 @@ function TabDistribucion({ posiciones, efectivoUSD }: { posiciones: PosicionComp
 
 // ─── Tab: Performance ─────────────────────────────────────────────────────────
 
-function TabPerformance({ posiciones }: { posiciones: PosicionCompleta[] }) {
-  const sorted = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
-  const top = sorted.slice(0, Math.min(5, sorted.length));
-  const bot = sorted.slice(-Math.min(5, sorted.length)).reverse();
-  const renderItem = (p: PosicionCompleta, i: number, isTop: boolean) => (
-    <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: i < (isTop ? top : bot).length - 1 ? '8px' : '0', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
+function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionCompleta[]; realizadas: GananciaRealizada[] }) {
+  const totalRealizada = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
+  const totalNoRealizada = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
+
+  const sortedPos = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
+  const top = sortedPos.slice(0, 5);
+  const bot = sortedPos.slice(-5).reverse();
+
+  const renderPosItem = (p: PosicionCompleta, i: number, isTop: boolean) => (
+    <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
       <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: isTop ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: isTop ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
       <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
-      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(p.pnlPct), fontWeight: 600 }}>{fmtPct(p.pnlPct)}</span>
       <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--muted)' }}>{fmtUSD(p.pnlUSD)}</span>
+      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(p.pnlPct), fontWeight: 600 }}>{fmtPct(p.pnlPct)}</span>
     </div>
   );
+
+  const renderRealItem = (r: GananciaRealizada, i: number) => (
+    <div key={r.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
+      <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: r.gananciaUSD >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: r.gananciaUSD >= 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
+      <div style={{ flex: 1 }}>
+        <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{r.ticker}</span>
+        {r.vencido && <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--muted)', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '1px 5px' }}>vencido</span>}
+      </div>
+      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--muted)' }}>{fmtUSD(r.gananciaUSD)}</span>
+      <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(r.gananciaUSD), fontWeight: 600 }}>{fmtPct(r.gananciaPct)}</span>
+    </div>
+  );
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-      <div className="card"><div className="label-xs" style={{ marginBottom: '14px' }}>🏆 Mejor performance</div>{top.map((p, i) => renderItem(p, i, true))}</div>
-      <div className="card"><div className="label-xs" style={{ marginBottom: '14px' }}>📉 Peor performance</div>{bot.map((p, i) => renderItem(p, i, false))}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+      {/* Resumen realizada vs no realizada */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <div className="card" style={{ borderColor: colorV(totalNoRealizada) === 'var(--green)' ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
+          <div className="label-xs" style={{ marginBottom: '8px' }}>📊 NO REALIZADA</div>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalNoRealizada) }}>{totalNoRealizada >= 0 ? '+' : ''}{fmtUSD(totalNoRealizada)}</div>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones abiertas</div>
+        </div>
+        <div className="card" style={{ borderColor: colorV(totalRealizada) === 'var(--green)' ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
+          <div className="label-xs" style={{ marginBottom: '8px' }}>✅ REALIZADA</div>
+          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalRealizada) }}>{totalRealizada >= 0 ? '+' : ''}{fmtUSD(totalRealizada)}</div>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones cerradas</div>
+        </div>
+      </div>
+
+      {/* No realizadas */}
+      {sortedPos.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div className="card">
+            <div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>
+            {top.map((p, i) => renderPosItem(p, i, true))}
+          </div>
+          <div className="card">
+            <div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>
+            {bot.map((p, i) => renderPosItem(p, i, false))}
+          </div>
+        </div>
+      )}
+
+      {/* Realizadas */}
+      {realizadas.length > 0 && (
+        <div className="card">
+          <div className="label-xs" style={{ marginBottom: '12px' }}>✅ Posiciones cerradas / realizadas</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              {realizadas.filter(r => r.gananciaUSD >= 0).map((r, i) => renderRealItem(r, i))}
+              {realizadas.filter(r => r.gananciaUSD >= 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin ganancias realizadas</div>}
+            </div>
+            <div>
+              {realizadas.filter(r => r.gananciaUSD < 0).map((r, i) => renderRealItem(r, i))}
+              {realizadas.filter(r => r.gananciaUSD < 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin pérdidas realizadas</div>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1059,6 +1167,7 @@ export default function PortfolioPage() {
   const [efectivoUSD, setEfectivoUSD] = useState(0);
   const [totalInvertidoUSD, setTotalInvertidoUSD] = useState(0);
   const [xirr, setXirr] = useState<number | null>(null);
+  const [vencimientosMap, setVencimientosMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetch('/api/dolar').then(r => r.json()).then((data: any[]) => {
@@ -1073,32 +1182,47 @@ export default function PortfolioPage() {
   }, []);
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
-    const posMap = calcularPosicionesBase(ops);
-    const totalInv = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
-    const efectivo = calcularEfectivoUSD(ops);
-    setTotalInvertidoUSD(totalInv);
-    setEfectivoUSD(efectivo);
-    const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({
-      ...pos, costoPromedioUSD: pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0,
-      precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null, loadingPrecio: true,
-    }));
-    setPosiciones([...posArray]);
-    const results = await Promise.all(posArray.map(async (pos, idx) => {
-      const { precioUSD, precioOriginal, moneda, variacion } = await fetchPrecio(pos.ticker, mepRate);
-      const valorActualUSD = precioUSD != null ? precioUSD * pos.cantidad : null;
-      const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
-      const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
-      return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion };
-    }));
-    const completed = posArray.map((pos, idx) => {
-      const r = results.find(x => x.idx === idx);
-      if (!r) return { ...pos, loadingPrecio: false };
-      return { ...pos, ...r, loadingPrecio: false };
-    });
-    setPosiciones(completed);
-    const totalActivos = completed.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
-    setXirr(calcularCAGR(ops, totalActivos));
-  }, []);
+  const posMap = calcularPosicionesBase(ops);
+  const totalInv = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
+  const efectivo = calcularEfectivoUSD(ops);
+  setTotalInvertidoUSD(totalInv);
+  setEfectivoUSD(efectivo);
+
+  const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({
+    ...pos, costoPromedioUSD: pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0,
+    precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null, loadingPrecio: true,
+  }));
+  setPosiciones([...posArray]);
+
+  const vMap: Record<string, string> = {};
+  const hoy = new Date();
+
+  const results = await Promise.all(posArray.map(async (pos, idx) => {
+    const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.ticker, mepRate);
+    if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
+    const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
+    const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
+    const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
+    const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
+    return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion, esVencido };
+  }));
+
+  setVencimientosMap(vMap);
+
+  const completed = posArray.map((pos, idx) => {
+    const r = results.find(x => x.idx === idx);
+    if (!r) return { ...pos, loadingPrecio: false };
+    return { ...pos, ...r, loadingPrecio: false };
+  });
+
+  // Solo mostrar en tenencias los activos NO vencidos
+  const activas = completed.filter(p => !p.esVencido);
+  setPosiciones(activas);
+
+  const totalActivos = activas.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
+  setXirr(calcularCAGR(ops, totalActivos));
+  setRealizadas(calcularGananciasRealizadas(ops, vMap));
+}, []);
 
   const loadData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true);
@@ -1189,7 +1313,7 @@ export default function PortfolioPage() {
           {tab === 'posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'mapa'         && <TabMapa posiciones={posiciones} />}
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
-          {tab === 'performance'  && <TabPerformance posiciones={posiciones} />}
+          {tab === 'performance' && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
           {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} valorActualIol={valorTotalUSD} />}
           {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} onImport={() => setShowImport(true)} />}
         </>
