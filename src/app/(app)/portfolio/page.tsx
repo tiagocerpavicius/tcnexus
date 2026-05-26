@@ -15,7 +15,7 @@ interface Operacion {
   broker: string | null; notas: string | null;
 }
 interface PosicionBase {
-  ticker: string; nombre: string; tipo_activo: string;
+  ticker: string; tickerBuscar: string; nombre: string; tipo_activo: string;
   broker: string; moneda: 'ARS' | 'USD'; cantidad: number; costoTotalUSD: number;
 }
 interface PosicionCompleta extends PosicionBase {
@@ -30,8 +30,7 @@ interface GananciaRealizada {
   cantidadVendida: number; vencido?: boolean;
 }
 interface OpImportada {
-  importId: string;
-  fecha: string; ticker: string; nombre: string | null;
+  importId: string; fecha: string; ticker: string; nombre: string | null;
   tipo: 'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro';
   cantidad: number | null; precio_unitario: number | null; monto_usd: number;
   moneda: 'ARS' | 'USD'; tipo_activo: string | null;
@@ -51,7 +50,7 @@ const TIPO_LABELS: Record<string, string> = { cedear: 'CEDEAR', accion_ar: 'Acci
 const TIPO_COLORS_OP: Record<string, string> = { compra: 'var(--green)', venta: 'var(--red)', dividendo: 'var(--violet-light)', deposito: '#06b6d4', retiro: 'var(--amber)' };
 const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
 
-// ─── Constantes de activos ────────────────────────────────────────────────────
+// ─── Constantes ───────────────────────────────────────────────────────────────
 
 const NO_NORMALIZAR_D = new Set(['YPFD', 'NDD']);
 const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
@@ -90,8 +89,14 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
     const tickerKey = normalizarTicker(op.ticker);
+    const tickerOriginal = op.ticker.toUpperCase();
     if (!map.has(tickerKey)) {
-      map.set(tickerKey, { ticker: tickerKey, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
+      map.set(tickerKey, { ticker: tickerKey, tickerBuscar: tickerOriginal, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
+    } else {
+      const pos = map.get(tickerKey)!;
+      if (tickerOriginal.endsWith('D') && !NO_NORMALIZAR_D.has(tickerOriginal)) {
+        pos.tickerBuscar = tickerOriginal;
+      }
     }
     const pos = map.get(tickerKey)!;
     if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
@@ -119,44 +124,32 @@ function calcularEfectivoUSD(ops: Operacion[]): number {
 function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}): GananciaRealizada[] {
   const bases = new Map<string, { costoTotal: number; cantidad: number; nombre: string; tipo_activo: string }>();
   const realizadasMap = new Map<string, GananciaRealizada>();
-
   for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
     const key = normalizarTicker(op.ticker);
     if (!bases.has(key)) bases.set(key, { costoTotal: 0, cantidad: 0, nombre: op.nombre || key, tipo_activo: op.tipo_activo || 'otro' });
     const base = bases.get(key)!;
-    if (op.tipo === 'compra') {
-      base.costoTotal += op.monto_usd;
-      base.cantidad += (op.cantidad || 0);
-    } else if (op.tipo === 'venta' && base.cantidad > 0) {
+    if (op.tipo === 'compra') { base.costoTotal += op.monto_usd; base.cantidad += (op.cantidad || 0); }
+    else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
       const costoVendido = base.costoTotal * pct;
       const ganancia = op.monto_usd - costoVendido;
-      if (!realizadasMap.has(key)) {
-        realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
-      }
+      if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
-      real.montoVentaUSD += op.monto_usd;
-      real.costoRealizadoUSD += costoVendido;
-      real.gananciaUSD += ganancia;
-      real.cantidadVendida += cantVendida;
-      base.costoTotal -= costoVendido;
-      base.cantidad -= cantVendida;
+      real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
+      real.gananciaUSD += ganancia; real.cantidadVendida += cantVendida;
+      base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
     }
   }
-
   const hoy = new Date();
   for (const [key, base] of Array.from(bases.entries())) {
     if (base.cantidad <= 0.000001) continue;
     const venc = vencimientosMap[key];
     if (venc && new Date(venc) < hoy) {
-      if (!realizadasMap.has(key)) {
-        realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: base.costoTotal, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: base.cantidad, vencido: true });
-      }
+      if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: base.costoTotal, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: base.cantidad, vencido: true });
       realizadasMap.get(key)!.vencido = true;
     }
   }
-
   return Array.from(realizadasMap.values())
     .map(r => ({ ...r, gananciaPct: r.costoRealizadoUSD > 0 ? (r.gananciaUSD / r.costoRealizadoUSD) * 100 : 0 }))
     .sort((a, b) => b.gananciaUSD - a.gananciaUSD);
@@ -237,17 +230,13 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
     const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
     return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? '']));
   }).filter(r => r['Tipo Mov.']);
-
   const groups = new Map<string, typeof rawRows>();
   for (const row of rawRows) {
-    const key = (row['Nro. de Boleto'] && String(row['Nro. de Boleto']).trim() !== '0')
-      ? String(row['Nro. de Boleto']).trim()
-      : String(row['Nro. de Mov.']).trim();
+    const key = (row['Nro. de Boleto'] && String(row['Nro. de Boleto']).trim() !== '0') ? String(row['Nro. de Boleto']).trim() : String(row['Nro. de Mov.']).trim();
     if (!key) continue;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(row);
   }
-
   const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
   for (const [boleto, rows] of Array.from(groups.entries())) {
     const tipoMov = rows[0]['Tipo Mov.'] || '';
@@ -271,8 +260,7 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
         cantidad = parseFloat(usdRow['Cant. titulos']) || null;
         fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']);
       } else if (arsRow) {
-        moneda = 'ARS';
-        monto_usd = parseIOLMonto(arsRow['Monto']) / mep;
+        moneda = 'ARS'; monto_usd = parseIOLMonto(arsRow['Monto']) / mep;
         precio_unitario = parseFloat(String(arsRow['Precio']).replace(',', '.')) || null;
         cantidad = parseFloat(arsRow['Cant. titulos']) || null;
         fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']);
@@ -280,16 +268,7 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
     }
     if (!monto_usd || !fecha) continue;
     const esCashOp = tipo === 'deposito' || tipo === 'retiro';
-    result.push({
-      importId: `IOL-${boleto}`, fecha,
-      ticker: esCashOp ? 'EFECTIVO' : ticker,
-      nombre: esCashOp ? (tipo === 'deposito' ? 'Depósito' : 'Retiro') : ticker,
-      tipo, cantidad: esCashOp ? null : cantidad,
-      precio_unitario: esCashOp ? null : precio_unitario,
-      monto_usd, moneda,
-      tipo_activo: esCashOp ? 'efectivo' : detectTipoActivo(ticker),
-      broker: 'IOL', notas: null,
-    });
+    result.push({ importId: `IOL-${boleto}`, fecha, ticker: esCashOp ? 'EFECTIVO' : ticker, nombre: esCashOp ? (tipo === 'deposito' ? 'Depósito' : 'Retiro') : ticker, tipo, cantidad: esCashOp ? null : cantidad, precio_unitario: esCashOp ? null : precio_unitario, monto_usd, moneda, tipo_activo: esCashOp ? 'efectivo' : detectTipoActivo(ticker), broker: 'IOL', notas: null });
   }
   return result;
 }
@@ -408,19 +387,34 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 
 // ─── Tab: Posiciones ──────────────────────────────────────────────────────────
 
-function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionCompleta[]; efectivoUSD: number }) {
+function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number }) {
+  const [verUSD, setVerUSD] = useState(false);
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
   const totalCostoUSD = posiciones.reduce((s, p) => s + p.costoTotalUSD, 0);
   const totalPnlUSD = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const totalPnlPct = totalCostoUSD > 0 ? (totalPnlUSD / totalCostoUSD) * 100 : 0;
+
+  const fmtPrecio = (p: PosicionCompleta) => {
+    if (p.precioActual == null) return '—';
+    if (verUSD) return fmtUSD(p.moneda === 'ARS' ? p.precioActual / mep : p.precioActual);
+    return p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual);
+  };
+
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{posiciones.length} posiciones activas</div>
+        <div style={{ display: 'flex', gap: '4px', background: 'var(--surface)', borderRadius: '8px', padding: '3px' }}>
+          <button onClick={() => setVerUSD(false)} style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: !verUSD ? 'var(--violet)' : 'transparent', color: !verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>ARS</button>
+          <button onClick={() => setVerUSD(true)} style={{ padding: '4px 12px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: verUSD ? 'var(--violet)' : 'transparent', color: verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>USD</button>
+        </div>
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo','Precio','Cantidad','Costo Prom.','Valor Actual','P&L USD','P&L %','Var. Hoy','Tipo','Broker'].map(h => (
+              {['Activo', `Precio (${verUSD ? 'USD' : 'orig.'})`, 'Cantidad', 'Costo Prom.', 'Valor Actual', 'P&L USD', 'P&L %', 'Var. Hoy', 'Tipo', 'Broker'].map(h => (
                 <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -433,7 +427,12 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
                   {p.nombre !== p.ticker && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div><div style={{ color: 'var(--text)' }}>{p.precioActual != null ? (p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtUSD(p.precioActual)) : '—'}</div><div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div></div>}
+                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : (
+                    <div>
+                      <div style={{ color: 'var(--text)' }}>{fmtPrecio(p)}</div>
+                      {!verUSD && <div style={{ fontSize: '10px', color: 'var(--muted)' }}>{p.moneda}</div>}
+                    </div>
+                  )}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtUSD(p.costoPromedioUSD)}</td>
@@ -534,9 +533,10 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
   const totalRealizada = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
   const totalNoRealizada = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const sortedPos = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
+
   const top = sortedPos.filter(p => p.pnlPct != null && p.pnlPct > 0).slice(0, 5);
-const topTickers = new Set(top.map(p => p.ticker));
-const bot = sortedPos.filter(p => p.pnlPct != null && p.pnlPct < 0 && !topTickers.has(p.ticker)).slice(-5).reverse();
+  const topTickers = new Set(top.map(p => p.ticker));
+  const bot = sortedPos.filter(p => p.pnlPct != null && p.pnlPct < 0 && !topTickers.has(p.ticker)).slice(-5).reverse();
 
   const renderPosItem = (p: PosicionCompleta, i: number, isTop: boolean) => (
     <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
@@ -573,12 +573,20 @@ const bot = sortedPos.filter(p => p.pnlPct != null && p.pnlPct < 0 && !topTicker
           <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones cerradas</div>
         </div>
       </div>
-      {sortedPos.length > 0 && (
+
+      {(top.length > 0 || bot.length > 0) && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-          <div className="card"><div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>{top.map((p, i) => renderPosItem(p, i, true))}</div>
-          <div className="card"><div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>{bot.map((p, i) => renderPosItem(p, i, false))}</div>
+          <div className="card">
+            <div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>
+            {top.length > 0 ? top.map((p, i) => renderPosItem(p, i, true)) : <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin ganancias abiertas</div>}
+          </div>
+          <div className="card">
+            <div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>
+            {bot.length > 0 ? bot.map((p, i) => renderPosItem(p, i, false)) : <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin pérdidas abiertas</div>}
+          </div>
         </div>
       )}
+
       {realizadas.length > 0 && (
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>✅ Posiciones cerradas / realizadas</div>
@@ -1048,7 +1056,7 @@ export default function PortfolioPage() {
     const hoy = new Date();
 
     const results = await Promise.all(posArray.map(async (pos, idx) => {
-      const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.ticker, mepRate);
+      const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.tickerBuscar, mepRate);
       if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
       const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
       const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
@@ -1151,7 +1159,7 @@ export default function PortfolioPage() {
             ))}
           </div>
 
-          {tab === 'posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} />}
+          {tab === 'posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} />}
           {tab === 'mapa'         && <TabMapa posiciones={posiciones} />}
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
