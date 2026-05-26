@@ -1,10 +1,8 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trash2, RefreshCw, Check, X, ChevronRight, ChevronDown, Pencil, TrendingDown } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { supabase } from '@/lib/supabase';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Moneda = 'ARS' | 'USD';
 
@@ -21,8 +19,6 @@ interface Activo {
   precioCompra: number; precioActual: number;
   precioVenta?: number; fechaVenta?: string; moneda: Moneda;
 }
-
-// ─── Calculations ─────────────────────────────────────────────────────────────
 
 function calcVencimiento(fechaInicio: string, plazo: number): string {
   const d = new Date(fechaInicio + 'T00:00:00');
@@ -53,7 +49,6 @@ function calcPnLPct(precioCompra: number, precioActual: number): number {
   return precioCompra > 0 ? ((precioActual - precioCompra) / precioCompra) * 100 : 0;
 }
 
-// Formatea según moneda
 const fmtM = (n: number, moneda: Moneda, dec = 2): string => {
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
@@ -65,8 +60,6 @@ const fmtM = (n: number, moneda: Moneda, dec = 2): string => {
 const fmtPct = (n: number): string => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 const fmtNum = (n: number, dec = 2): string =>
   new Intl.NumberFormat('es-AR', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n);
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const genId = (): string => Date.now().toString(36) + Math.random().toString(36).slice(2);
 
@@ -287,12 +280,14 @@ function CaucionesTab({ cauciones, periodos, monedaActiva, onAdd, onRenovar, onD
                               {[{ label: 'Monto', field: 'monto' as const, w: '90px' }, { label: 'TNA %', field: 'tna' as const, w: '70px' }, { label: 'Plazo d', field: 'plazo' as const, w: '60px' }].map(({ label, field, w }) => (
                                 <div key={field} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                   <span style={{ fontSize: '11px', color: 'var(--muted2)' }}>{label}</span>
-                                  <input type="number" value={renovForm[field]} onChange={e => setRenovForm(p => ({ ...p, [field]: e.target.value }))} placeholder="" style={{ width: w, background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '12px', textAlign: 'right' }} />
+                                  <input type="number" value={renovForm[field]} onChange={e => setRenovForm(p => ({ ...p, [field]: e.target.value }))}
+                                    style={{ width: w, background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '12px', textAlign: 'right' }} />
                                 </div>
                               ))}
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span style={{ fontSize: '11px', color: 'var(--muted2)' }}>Fecha</span>
-                                <input type="date" value={renovForm.fechaInicio} onChange={e => setRenovForm(p => ({ ...p, fechaInicio: e.target.value }))} style={{ width: '130px', background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '12px' }} />
+                                <input type="date" value={renovForm.fechaInicio} onChange={e => setRenovForm(p => ({ ...p, fechaInicio: e.target.value }))}
+                                  style={{ width: '130px', background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '12px' }} />
                               </div>
                               <div style={{ display: 'flex', gap: '6px' }}>
                                 <button onClick={() => confirmRenovar(c.id)} style={{ background: 'var(--violet)', color: '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Check size={12} /> Confirmar</button>
@@ -313,7 +308,7 @@ function CaucionesTab({ cauciones, periodos, monedaActiva, onAdd, onRenovar, onD
         <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
           <div style={{ fontSize: '36px', marginBottom: '16px' }}>📋</div>
           <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--text)', marginBottom: '8px' }}>Sin cauciones en {monedaActiva}</div>
-          <div style={{ fontSize: '13px', color: 'var(--muted2)' }}>Agregá una caución tomadora en {monedaActiva} arriba.</div>
+          <div style={{ fontSize: '13px', color: 'var(--muted2)' }}>Agregá una caución tomadora arriba.</div>
         </div>
       )}
     </div>
@@ -340,13 +335,25 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
   const [refreshMsg, setRefreshMsg] = useState('');
   const [mep, setMep] = useState(1430);
 
+  // Fetch MEP
   useEffect(() => {
     fetch('/api/dolar').then(r => r.json()).then((data: any[]) => {
       if (Array.isArray(data)) { const bolsa = data.find(d => d.casa === 'bolsa'); if (bolsa?.venta) setMep(bolsa.venta); }
     }).catch(() => {});
   }, []);
 
-  // Reset form tipo cuando cambia moneda
+  const abiertas = activos.filter(a => !a.precioVenta);
+  const cerradas = activos.filter(a => a.precioVenta !== undefined);
+
+  // ─── Auto-actualizar precios al cargar ───
+  const autoRefreshRef = useRef(false);
+  useEffect(() => {
+    if (autoRefreshRef.current || abiertas.length === 0) return;
+    autoRefreshRef.current = true;
+    const t = setTimeout(() => handleRefresh(), 800);
+    return () => clearTimeout(t);
+  }, [abiertas.length]);
+
   useEffect(() => {
     setForm(p => ({ ...p, tipo: monedaActiva === 'USD' ? 'cedear' : 'lecap' }));
   }, [monedaActiva]);
@@ -375,22 +382,21 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
           let precio: number | null = null;
           if (data.tipo === 'cedear') {
             const v = data.precio?.valor; const m = data.precio?.moneda;
-            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+            if (monedaActiva === 'ARS') precio = v ?? null;
+            else precio = v ? (m === 'ARS' ? v / mep : v) : null;
           } else if (data.tipo === 'renta_variable') {
             const v = data.precio; const m = data.monedaLabel;
-            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+            if (monedaActiva === 'ARS') precio = v ?? null;
+            else precio = v ? (m === 'ARS' ? v / mep : v) : null;
           } else if (data.tipo === 'renta_fija') {
             const v = data.precio?.valor; const m = data.monedaLabel;
-            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+            if (monedaActiva === 'ARS') precio = v ?? null;
+            else precio = v ? (m === 'ARS' ? v / mep : v) : null;
           }
           if (precio != null) {
-            // Para ARS, el precio ya viene en ARS, no convertir
-            const precioFinal = monedaActiva === 'ARS' && data.tipo !== 'renta_variable'
-              ? (data.precio?.valor ?? data.precio ?? precio)
-              : precio;
             for (const t of abiertas.filter(a => a.ticker === ticker)) {
-              if (Math.abs(t.precioActual - precioFinal) > 0.0001) {
-                await onUpdate(t.id, { precioActual: precioFinal });
+              if (Math.abs(t.precioActual - precio!) > 0.0001) {
+                await onUpdate(t.id, { precioActual: precio! });
                 updated++;
               }
             }
@@ -403,8 +409,6 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
     setTimeout(() => setRefreshMsg(''), 4000);
   };
 
-  const abiertas = activos.filter(a => !a.precioVenta);
-  const cerradas = activos.filter(a => a.precioVenta !== undefined);
   const totalInvertido = abiertas.reduce((a, c) => a + c.precioCompra * c.cantidad, 0);
   const totalActual = abiertas.reduce((a, c) => a + c.precioActual * c.cantidad, 0);
   const pnlAbierto = totalActual - totalInvertido;
@@ -421,7 +425,6 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
       onMouseOut={e => (e.currentTarget.style.color = 'var(--muted)')}>{icon}</button>
   );
 
-  // Sugerencias de tipo según moneda
   const tipoOpts = monedaActiva === 'ARS'
     ? [{ value: 'lecap', label: 'LECAP' }, { value: 'bono', label: 'Bono Soberano' }, { value: 'accion_ar', label: 'Acción AR' }, { value: 'on', label: 'ON' }, { value: 'cedear', label: 'CEDEAR (ARS)' }, { value: 'otro', label: 'Otro' }]
     : [{ value: 'cedear', label: 'CEDEAR' }, { value: 'bono', label: 'Bono Soberano' }, { value: 'on', label: 'ON' }, { value: 'accion_ar', label: 'Acción AR' }, { value: 'otro', label: 'Otro' }];
@@ -433,7 +436,7 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
           Nuevo Activo <span style={{ color: monedaActiva === 'ARS' ? 'var(--amber)' : 'var(--green)', fontSize: '11px', fontFamily: 'DM Mono, monospace' }}>· {monedaActiva}</span>
         </div>
         <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>
-          {monedaActiva === 'ARS' ? 'Activo comprado con capital en pesos de la caución (LECAP, bono ARS, acciones, etc.).' : 'Activo comprado con capital en USD de la caución (CEDEARs segmento D, bonos USD, etc.).'}
+          {monedaActiva === 'ARS' ? 'Activo en pesos: LECAP, bono ARS, acciones, etc.' : 'Activo en USD: CEDEARs segmento D, bonos USD, etc.'}
         </div>
         <form onSubmit={handleSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px', marginBottom: '14px' }}>
@@ -476,7 +479,10 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
       {abiertas.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div className="label-xs">Posiciones abiertas</div>
+            <div>
+              <div className="label-xs">Posiciones abiertas</div>
+              <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px', fontFamily: 'DM Mono, monospace' }}>Precios se actualizan automáticamente al cargar</div>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {refreshMsg && <span style={{ fontSize: '11px', fontFamily: 'DM Mono, monospace', color: refreshMsg.startsWith('✓') ? 'var(--green)' : 'var(--red)' }}>{refreshMsg}</span>}
               <button onClick={handleRefresh} disabled={refreshing}
@@ -484,7 +490,7 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
                 onMouseOver={e => { if (!refreshing) e.currentTarget.style.borderColor = 'var(--violet)'; }}
                 onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}>
                 <RefreshCw size={13} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
-                {refreshing ? 'Actualizando...' : 'Actualizar precios'}
+                {refreshing ? 'Actualizando...' : 'Actualizar'}
               </button>
             </div>
           </div>
@@ -492,7 +498,7 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                  {['Ticker','Tipo','Cant.',`P. prom. (${monedaActiva})`,`P. actual (${monedaActiva})`,'Invertido','Valor actual','P&L','P&L %',''].map((h, i) => (
+                  {['Ticker','Tipo','Cant.',`P. prom.`,`P. actual`,'Invertido','Valor actual','P&L','P&L %',''].map((h, i) => (
                     <th key={i} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', fontSize: '11px', fontWeight: 700, fontFamily: 'Syne, sans-serif', color: 'var(--muted2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -612,18 +618,15 @@ function ResumenTab({ cauciones, periodos, activos, monedaActiva }: {
 }) {
   const abiertas = activos.filter(a => !a.precioVenta);
   const cerradas = activos.filter(a => a.precioVenta !== undefined);
-
   const totalInvertido = abiertas.reduce((a, c) => a + c.precioCompra * c.cantidad, 0);
   const totalActual = abiertas.reduce((a, c) => a + c.precioActual * c.cantidad, 0);
   const pnlNoRealizado = totalActual - totalInvertido;
   const pnlRealizado = cerradas.reduce((a, c) => a + calcPnL(c.precioCompra, c.precioVenta!, c.cantidad), 0);
   const pnlTotal = pnlNoRealizado + pnlRealizado;
-
   const totalCostoCauciones = cauciones.reduce((total, c) => {
     const historico = (periodos[c.id] ?? []).reduce((a, p) => a + p.intereses, 0);
     return total + historico + calcInteresPeriodo(c.monto, c.tna, c.plazo);
   }, 0);
-
   const rendimientoNeto = pnlTotal - totalCostoCauciones;
   const rendimientoNetoPct = totalInvertido > 0 ? (rendimientoNeto / totalInvertido) * 100 : 0;
 
@@ -641,12 +644,10 @@ function ResumenTab({ cauciones, periodos, activos, monedaActiva }: {
   const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
   const axisProps = { tick: { fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }, axisLine: false as const, tickLine: false as const };
 
-  const monedaLabel = monedaActiva === 'ARS' ? 'Pesos (ARS)' : 'Dólares (USD)';
-
   if (cauciones.length === 0 && activos.length === 0) return (
     <div className="card" style={{ textAlign: 'center', padding: '80px 20px' }}>
-      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'var(--border)', marginBottom: '16px' }}>SIN DATOS</div>
-      <div style={{ fontSize: '14px', color: 'var(--muted)' }}>Cargá cauciones y activos en {monedaLabel} en las pestañas de arriba.</div>
+      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'var(--border)', marginBottom: '16px' }}>SIN DATOS · {monedaActiva}</div>
+      <div style={{ fontSize: '14px', color: 'var(--muted)' }}>Cargá cauciones y activos en {monedaActiva} en las pestañas de arriba.</div>
     </div>
   );
 
@@ -686,10 +687,9 @@ function ResumenTab({ cauciones, periodos, activos, monedaActiva }: {
               </BarChart>
             </ResponsiveContainer>
           </div>
-
           <div className="card">
             <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Resultado total de la estrategia ({monedaActiva})</div>
-            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>P&L de activos vs costo de cauciones en {monedaActiva}. La última barra es lo que efectivamente ganás.</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>P&L activos vs costo cauciones. La última barra es lo que efectivamente ganás.</div>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={estrategiaData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
@@ -747,11 +747,9 @@ export default function CaucionesPage() {
     load();
   }, [userId]);
 
-  // Filtrar por moneda activa
   const caucionesFiltradas = cauciones.filter(c => c.moneda === monedaActiva);
   const activosFiltrados = activos.filter(a => a.moneda === monedaActiva);
 
-  // Actions cauciones
   const addCaucion = useCallback(async (data: Omit<Caucion, 'id' | 'renovaciones'>) => {
     if (!userId) return;
     const id = genId();
@@ -781,7 +779,6 @@ export default function CaucionesPage() {
     setPeriodos(p => { const next = { ...p }; delete next[id]; return next; });
   }, [userId]);
 
-  // Actions activos
   const addActivo = useCallback(async (data: Omit<Activo, 'id'>) => {
     if (!userId) return;
     const existing = activos.find(a => a.ticker === data.ticker && a.moneda === data.moneda && !a.precioVenta);
@@ -820,20 +817,16 @@ export default function CaucionesPage() {
     </div>
   );
 
-  // Stats rápidos por moneda para mostrar en el toggle
   const statsUSD = { caucs: cauciones.filter(c => c.moneda === 'USD').length, acts: activos.filter(a => a.moneda === 'USD').length };
   const statsARS = { caucs: cauciones.filter(c => c.moneda === 'ARS').length, acts: activos.filter(a => a.moneda === 'ARS').length };
 
   return (
     <div style={{ maxWidth: '1100px' }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Cauciones</h1>
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Estrategia de cauciones tomadoras · capital y rendimiento por moneda.</div>
         </div>
-
-        {/* Toggle ARS / USD */}
         <div style={{ display: 'flex', gap: '8px' }}>
           {(['USD', 'ARS'] as Moneda[]).map(m => {
             const stats = m === 'USD' ? statsUSD : statsARS;
@@ -848,7 +841,6 @@ export default function CaucionesPage() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', width: 'fit-content' }}>
         {[{ key: 'resumen' as Tab, label: 'Resumen', icon: '📊' }, { key: 'cauciones' as Tab, label: 'Cauciones', icon: '📋' }, { key: 'activos' as Tab, label: 'Activos', icon: '💼' }].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', transition: 'all 0.15s' }}>
