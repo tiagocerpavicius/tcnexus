@@ -534,8 +534,9 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
   const totalRealizada = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
   const totalNoRealizada = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const sortedPos = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
-  const top = sortedPos.slice(0, 5);
-  const bot = sortedPos.slice(-5).reverse();
+  const top = sortedPos.filter(p => p.pnlPct != null && p.pnlPct > 0).slice(0, 5);
+const topTickers = new Set(top.map(p => p.ticker));
+const bot = sortedPos.filter(p => p.pnlPct != null && p.pnlPct < 0 && !topTickers.has(p.ticker)).slice(-5).reverse();
 
   const renderPosItem = (p: PosicionCompleta, i: number, isTop: boolean) => (
     <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', padding: '8px', background: 'var(--surface2)', borderRadius: '8px' }}>
