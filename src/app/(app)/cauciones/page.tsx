@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { Trash2, RefreshCw, Check, X, ChevronRight, ChevronDown, Clock, AlertTriangle } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Trash2, RefreshCw, Check, X, ChevronRight, ChevronDown, Clock, AlertTriangle, Pencil, TrendingDown } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { supabase } from '@/lib/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -14,6 +14,11 @@ interface CaucionPeriodo {
   id: string; caucionId: string; monto: number; tna: number;
   plazo: number; fechaInicio: string; intereses: number;
 }
+interface Activo {
+  id: string; ticker: string; tipo: string; cantidad: number;
+  precioCompra: number; precioActual: number;
+  precioVenta?: number; fechaVenta?: string;
+}
 
 // ─── Calculations ─────────────────────────────────────────────────────────────
 
@@ -22,33 +27,35 @@ function calcVencimiento(fechaInicio: string, plazo: number): string {
   d.setDate(d.getDate() + plazo);
   return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
-
 function calcVencimientoISO(fechaInicio: string, plazo: number): string {
   const d = new Date(fechaInicio + 'T00:00:00');
   d.setDate(d.getDate() + plazo);
   return d.toISOString().split('T')[0];
 }
-
 function calcDiasRestantes(fechaInicio: string, plazo: number): number {
   const venc = new Date(fechaInicio + 'T00:00:00');
   venc.setDate(venc.getDate() + plazo);
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   return Math.ceil((venc.getTime() - hoy.getTime()) / 86400000);
 }
-
 function calcInteresPeriodo(monto: number, tna: number, plazo: number): number {
   return monto * (tna / 100) * (plazo / 365);
 }
-
 function calcTEA(tna: number, plazo: number): number {
   return (Math.pow(1 + (tna / 100) * (plazo / 365), 365 / plazo) - 1) * 100;
 }
+function calcPnL(precioCompra: number, precioActual: number, cantidad: number): number {
+  return (precioActual - precioCompra) * cantidad;
+}
+function calcPnLPct(precioCompra: number, precioActual: number): number {
+  return precioCompra > 0 ? ((precioActual - precioCompra) / precioCompra) * 100 : 0;
+}
 
 const fmtUSD = (n: number, dec = 2): string =>
-  '$' + new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n);
-
+  (n < 0 ? '-$' : '$') + new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(Math.abs(n));
 const fmtPct = (n: number): string => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+const fmtNum = (n: number, dec = 2): string =>
+  new Intl.NumberFormat('es-AR', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n);
 
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
 
@@ -60,17 +67,27 @@ function rowToCaucion(r: any): Caucion {
 function rowToPeriodo(r: any): CaucionPeriodo {
   return { id: r.id, caucionId: r.caucion_id, monto: r.monto, tna: r.tna, plazo: r.plazo, fechaInicio: r.fecha_inicio, intereses: r.intereses };
 }
+function rowToActivo(r: any): Activo {
+  return { id: r.id, ticker: r.ticker, tipo: r.tipo || 'cedear', cantidad: r.cantidad, precioCompra: r.precio_compra, precioActual: r.precio_actual, precioVenta: r.precio_venta ?? undefined, fechaVenta: r.fecha_venta ?? undefined };
+}
+
+const TIPO_ACTIVO_OPTS = [
+  { value: 'cedear', label: 'CEDEAR' },
+  { value: 'lecap', label: 'LECAP' },
+  { value: 'bono', label: 'Bono Soberano' },
+  { value: 'on', label: 'ON' },
+  { value: 'accion_ar', label: 'Acción AR' },
+  { value: 'otro', label: 'Otro' },
+];
 
 // ─── Tab: Cauciones ───────────────────────────────────────────────────────────
 
-interface CaucionesTabProps {
+function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: {
   cauciones: Caucion[]; periodos: Record<string, CaucionPeriodo[]>;
-  onAdd: (data: Omit<Caucion, 'id' | 'renovaciones'>) => Promise<void>;
-  onRenovar: (id: string, params: { monto: number; tna: number; plazo: number; fechaInicio: string }) => Promise<void>;
+  onAdd: (d: Omit<Caucion, 'id' | 'renovaciones'>) => Promise<void>;
+  onRenovar: (id: string, p: { monto: number; tna: number; plazo: number; fechaInicio: string }) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-}
-
-function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: CaucionesTabProps) {
+}) {
   const EMPTY = { descripcion: '', monto: '', tna: '', plazo: '', fechaInicio: new Date().toISOString().split('T')[0] };
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
@@ -86,21 +103,18 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
     if (!form.monto || !form.tna || !form.plazo) return;
     setSaving(true);
     await onAdd({ descripcion: form.descripcion, monto: Number(form.monto), tna: Number(form.tna), plazo: Number(form.plazo), fechaInicio: form.fechaInicio });
-    setForm(EMPTY);
-    setSaving(false);
+    setForm(EMPTY); setSaving(false);
   };
 
   const startRenovar = (c: Caucion) => {
     setRenovando(c.id);
     setRenovForm({ monto: String(c.monto), tna: String(c.tna), plazo: String(c.plazo), fechaInicio: calcVencimientoISO(c.fechaInicio, c.plazo) });
   };
-
   const confirmRenovar = async (id: string) => {
     if (!renovForm.monto || !renovForm.tna || !renovForm.plazo) return;
     await onRenovar(id, { monto: Number(renovForm.monto), tna: Number(renovForm.tna), plazo: Number(renovForm.plazo), fechaInicio: renovForm.fechaInicio });
     setRenovando(null);
   };
-
   const toggleExpanded = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const totalMonto = cauciones.reduce((a, c) => a + c.monto, 0);
@@ -118,62 +132,35 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Formulario nueva caución */}
+      {/* Form */}
       <div className="card">
         <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '16px' }}>Nueva Caución Tomadora</div>
         <form onSubmit={handleSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '14px' }}>
-            <div style={{ gridColumn: 'span 2' }}>
-              <label style={ls}>Descripción</label>
-              <input className="input-field" type="text" placeholder="Ej: Caución BYMA 14/5" value={form.descripcion} onChange={e => set('descripcion', e.target.value)} />
-            </div>
-            <div>
-              <label style={ls}>Monto (USD)</label>
-              <input className="input-field" type="number" step="0.01" placeholder="10000" value={form.monto} onChange={e => set('monto', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} />
-            </div>
-            <div>
-              <label style={ls}>TNA (%)</label>
-              <input className="input-field" type="number" step="0.01" placeholder="8.5" value={form.tna} onChange={e => set('tna', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} />
-            </div>
-            <div>
-              <label style={ls}>Plazo (días)</label>
-              <input className="input-field" type="number" placeholder="7" value={form.plazo} onChange={e => set('plazo', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} />
-            </div>
-            <div>
-              <label style={ls}>Fecha inicio</label>
-              <input className="input-field" type="date" value={form.fechaInicio} onChange={e => set('fechaInicio', e.target.value)} />
-            </div>
+            <div style={{ gridColumn: 'span 2' }}><label style={ls}>Descripción</label><input className="input-field" type="text" placeholder="Ej: Caución BYMA 14/5" value={form.descripcion} onChange={e => set('descripcion', e.target.value)} /></div>
+            <div><label style={ls}>Monto (USD)</label><input className="input-field" type="number" step="0.01" placeholder="10000" value={form.monto} onChange={e => set('monto', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>TNA (%)</label><input className="input-field" type="number" step="0.01" placeholder="8.5" value={form.tna} onChange={e => set('tna', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>Plazo (días)</label><input className="input-field" type="number" placeholder="7" value={form.plazo} onChange={e => set('plazo', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>Fecha inicio</label><input className="input-field" type="date" value={form.fechaInicio} onChange={e => set('fechaInicio', e.target.value)} /></div>
           </div>
-          {/* Preview */}
           {form.monto && form.tna && form.plazo && (
             <div style={{ marginBottom: '12px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Interés estimado: </span>
-                <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--red)' }}>{fmtUSD(calcInteresPeriodo(Number(form.monto), Number(form.tna), Number(form.plazo)))}</span>
-              </div>
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>TEA: </span>
-                <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--violet-light)' }}>{calcTEA(Number(form.tna), Number(form.plazo)).toFixed(2)}%</span>
-              </div>
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Vencimiento: </span>
-                <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--text2)' }}>{calcVencimiento(form.fechaInicio, Number(form.plazo))}</span>
-              </div>
+              <div><span style={{ fontSize: '11px', color: 'var(--muted)' }}>Interés estimado: </span><span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--red)' }}>{fmtUSD(calcInteresPeriodo(Number(form.monto), Number(form.tna), Number(form.plazo)))}</span></div>
+              <div><span style={{ fontSize: '11px', color: 'var(--muted)' }}>TEA: </span><span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--violet-light)' }}>{calcTEA(Number(form.tna), Number(form.plazo)).toFixed(2)}%</span></div>
+              <div><span style={{ fontSize: '11px', color: 'var(--muted)' }}>Vencimiento: </span><span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: 'var(--text2)' }}>{calcVencimiento(form.fechaInicio, Number(form.plazo))}</span></div>
             </div>
           )}
-          <button type="submit" disabled={saving} className="btn-primary" style={{ width: '100%', padding: '10px', fontSize: '14px' }}>
-            {saving ? 'Guardando...' : '+ Agregar Caución'}
-          </button>
+          <button type="submit" disabled={saving} className="btn-primary" style={{ width: '100%', padding: '10px', fontSize: '14px' }}>{saving ? 'Guardando...' : '+ Agregar Caución'}</button>
         </form>
       </div>
 
-      {/* Cards resumen */}
+      {/* Cards */}
       {cauciones.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
           {[
             { label: 'TOTAL TOMADO', value: fmtUSD(totalMonto), color: 'var(--amber)' },
             { label: 'COSTO ACUMULADO', value: fmtUSD(totalCosto), color: 'var(--red)' },
-            { label: 'POSICIONES', value: `${cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) >= 0).length} vigentes / ${cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) < 0).length} vencidas`, color: 'var(--text)' },
+            { label: 'POSICIONES', value: `${cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) >= 0).length} vigentes · ${cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) < 0).length} vencidas`, color: 'var(--text)' },
           ].map(card => (
             <div key={card.label} className="card">
               <div className="label-xs" style={{ marginBottom: '8px' }}>{card.label}</div>
@@ -190,9 +177,9 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
             <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                  <th style={{ width: '32px', padding: '10px 8px' }}></th>
-                  {['Descripción','Monto USD','TNA','Plazo','Vencimiento','Días rest.','Renovac.','Int. período','Int. total','Estado',''].map((h, i) => (
-                    <th key={h + i} style={{ padding: '10px 14px', textAlign: h === 'Descripción' ? 'left' : 'right', fontSize: '11px', fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '0.06em', color: 'var(--muted2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th style={{ width: '32px', padding: '10px 8px' }} />
+                  {['Descripción','Monto USD','TNA','Plazo','Vencimiento','Días','Renovac.','Int. período','Int. total','Estado',''].map((h, i) => (
+                    <th key={i} style={{ padding: '10px 14px', textAlign: h === 'Descripción' ? 'left' : 'right', fontSize: '11px', fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '0.06em', color: 'var(--muted2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -204,9 +191,8 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                   const isRenovando = renovando === c.id;
                   const isExpanded = expanded.has(c.id);
                   const historial = periodos[c.id] ?? [];
-                  const costoHistorico = historial.reduce((a, p) => a + p.intereses, 0);
+                  const costoHist = historial.reduce((a, p) => a + p.intereses, 0);
                   const costoActual = calcInteresPeriodo(c.monto, c.tna, c.plazo);
-                  const costoTotal = costoHistorico + costoActual;
 
                   return (
                     <>
@@ -215,8 +201,7 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                         onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
                         <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                           {historial.length > 0 && (
-                            <button onClick={() => toggleExpanded(c.id)}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted2)', padding: '2px', display: 'flex', alignItems: 'center' }}>
+                            <button onClick={() => toggleExpanded(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted2)', padding: '2px', display: 'flex', alignItems: 'center' }}>
                               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             </button>
                           )}
@@ -229,9 +214,9 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                         <td style={{ padding: '12px 14px', textAlign: 'right', color: diasColor, fontWeight: 600 }}>{dias}d</td>
                         <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{c.renovaciones === 0 ? '—' : `${c.renovaciones}x`}</td>
                         <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--red)' }}>{fmtUSD(costoActual)}</td>
-                        <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--red)', fontWeight: 600 }}>{fmtUSD(costoTotal)}</td>
+                        <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--red)', fontWeight: 600 }}>{fmtUSD(costoHist + costoActual)}</td>
                         <td style={{ padding: '12px 14px', textAlign: 'right' }}>
-                          <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '0.06em', padding: '3px 8px', borderRadius: '20px', background: vigente ? 'rgba(16,185,129,0.1)' : 'rgba(255,255,255,0.05)', color: vigente ? 'var(--green)' : 'var(--muted)', border: `1px solid ${vigente ? 'rgba(16,185,129,0.2)' : 'var(--border)'}` }}>
+                          <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'Syne, sans-serif', padding: '3px 8px', borderRadius: '20px', background: vigente ? 'rgba(16,185,129,0.1)' : 'rgba(255,255,255,0.05)', color: vigente ? 'var(--green)' : 'var(--muted)', border: `1px solid ${vigente ? 'rgba(16,185,129,0.2)' : 'var(--border)'}` }}>
                             {vigente ? 'VIGENTE' : 'VENCIDA'}
                           </span>
                         </td>
@@ -260,7 +245,6 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                         </td>
                       </tr>
 
-                      {/* Historial expandible */}
                       {isExpanded && historial.length > 0 && (
                         <tr key={`hist-${c.id}`} style={{ borderBottom: isRenovando ? 'none' : '1px solid var(--border)' }}>
                           <td colSpan={13} style={{ padding: '0 0 0 40px', background: 'rgba(0,0,0,0.15)' }}>
@@ -268,7 +252,7 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                               <thead>
                                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                   {['Período','Monto','TNA','Plazo','Fecha inicio','Intereses'].map(h => (
-                                    <th key={h} style={{ padding: '8px 14px', textAlign: h === 'Período' ? 'left' : 'right', fontSize: '10px', fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '0.06em', color: 'var(--muted)', textTransform: 'uppercase' }}>{h}</th>
+                                    <th key={h} style={{ padding: '8px 14px', textAlign: h === 'Período' ? 'left' : 'right', fontSize: '10px', fontWeight: 700, fontFamily: 'Syne, sans-serif', color: 'var(--muted)', textTransform: 'uppercase' }}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
@@ -289,20 +273,15 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                         </tr>
                       )}
 
-                      {/* Formulario renovación inline */}
                       {isRenovando && (
                         <tr key={`renov-${c.id}`} style={{ borderBottom: '1px solid var(--border)', background: 'rgba(124,58,237,0.04)' }}>
                           <td colSpan={13} style={{ padding: '12px 16px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--violet-light)', textTransform: 'uppercase' }}>Renovar</span>
-                              {[
-                                { label: 'Monto', field: 'monto' as const, placeholder: '10000', w: '90px' },
-                                { label: 'TNA %', field: 'tna' as const, placeholder: '8.5', w: '70px' },
-                                { label: 'Plazo d', field: 'plazo' as const, placeholder: '7', w: '60px' },
-                              ].map(({ label, field, placeholder, w }) => (
+                              <span style={{ fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--violet-light)', textTransform: 'uppercase' }}>Renovar</span>
+                              {[{ label: 'Monto', field: 'monto' as const, w: '90px' }, { label: 'TNA %', field: 'tna' as const, w: '70px' }, { label: 'Plazo d', field: 'plazo' as const, w: '60px' }].map(({ label, field, w }) => (
                                 <div key={field} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                   <span style={{ fontSize: '11px', color: 'var(--muted2)' }}>{label}</span>
-                                  {inlineInput(renovForm[field], v => setRenovForm(p => ({ ...p, [field]: v })), placeholder, w)}
+                                  {inlineInput(renovForm[field], v => setRenovForm(p => ({ ...p, [field]: v })), '', w)}
                                 </div>
                               ))}
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -310,14 +289,8 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
                                 {inlineInput(renovForm.fechaInicio, v => setRenovForm(p => ({ ...p, fechaInicio: v })), '', '130px', 'date')}
                               </div>
                               <div style={{ display: 'flex', gap: '6px' }}>
-                                <button onClick={() => confirmRenovar(c.id)}
-                                  style={{ background: 'var(--violet)', color: '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <Check size={12} /> Confirmar
-                                </button>
-                                <button onClick={() => setRenovando(null)}
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px', display: 'flex', alignItems: 'center' }}>
-                                  <X size={14} />
-                                </button>
+                                <button onClick={() => confirmRenovar(c.id)} style={{ background: 'var(--violet)', color: '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Check size={12} /> Confirmar</button>
+                                <button onClick={() => setRenovando(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px', display: 'flex', alignItems: 'center' }}><X size={14} /></button>
                               </div>
                             </div>
                           </td>
@@ -331,54 +304,349 @@ function CaucionesTab({ cauciones, periodos, onAdd, onRenovar, onDelete }: Cauci
           </div>
         </div>
       ) : (
-        <div className="card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+        <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
           <div style={{ fontSize: '36px', marginBottom: '16px' }}>📋</div>
           <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--text)', marginBottom: '8px' }}>Sin cauciones registradas</div>
-          <div style={{ fontSize: '13px', color: 'var(--muted2)' }}>Agregá una caución tomadora arriba para empezar a trackear.</div>
+          <div style={{ fontSize: '13px', color: 'var(--muted2)' }}>Agregá una caución tomadora arriba.</div>
         </div>
       )}
     </div>
   );
 }
 
+// ─── Tab: Activos ─────────────────────────────────────────────────────────────
+
+function ActivosTab({ activos, onAdd, onUpdate, onDelete }: {
+  activos: Activo[];
+  onAdd: (d: Omit<Activo, 'id'>) => Promise<void>;
+  onUpdate: (id: string, d: Partial<Omit<Activo, 'id'>>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const EMPTY = { ticker: '', tipo: 'cedear', cantidad: '', precioCompra: '', precioActual: '' };
+  const [form, setForm] = useState(EMPTY);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editPrecio, setEditPrecio] = useState('');
+  const [selling, setSelling] = useState<string | null>(null);
+  const [sellData, setSellData] = useState({ precio: '', fecha: new Date().toISOString().split('T')[0] });
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
+  const [mep, setMep] = useState(1430);
+
+  useEffect(() => {
+    fetch('/api/dolar').then(r => r.json()).then((data: any[]) => {
+      if (Array.isArray(data)) { const bolsa = data.find(d => d.casa === 'bolsa'); if (bolsa?.venta) setMep(bolsa.venta); }
+    }).catch(() => {});
+  }, []);
+
+  const set = (k: keyof typeof EMPTY, v: string) => setForm(p => ({ ...p, [k]: v }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.ticker || !form.cantidad || !form.precioCompra || !form.precioActual) return;
+    setSaving(true);
+    await onAdd({ ticker: form.ticker.toUpperCase(), tipo: form.tipo, cantidad: Number(form.cantidad), precioCompra: Number(form.precioCompra), precioActual: Number(form.precioActual) });
+    setForm(EMPTY); setSaving(false);
+  };
+
+  const handleRefresh = async () => {
+    if (!abiertas.length || refreshing) return;
+    setRefreshing(true); setRefreshMsg('');
+    try {
+      const tickers = Array.from(new Set(abiertas.map(a => a.ticker)));
+      let updated = 0;
+      await Promise.all(tickers.map(async ticker => {
+        try {
+          const res = await fetch(`/api/buscar?ticker=${ticker}`);
+          const data = await res.json();
+          if (data.error) return;
+          let precio: number | null = null;
+          if (data.tipo === 'cedear') {
+            const v = data.precio?.valor;
+            const m = data.precio?.moneda;
+            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+          } else if (data.tipo === 'renta_variable') {
+            const v = data.precio;
+            const m = data.monedaLabel;
+            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+          } else if (data.tipo === 'renta_fija') {
+            const v = data.precio?.valor;
+            const m = data.monedaLabel;
+            precio = v ? (m === 'ARS' ? v / mep : v) : null;
+          }
+          if (precio != null) {
+            const targets = abiertas.filter(a => a.ticker === ticker);
+            for (const t of targets) {
+              if (Math.abs(t.precioActual - precio!) > 0.0001) {
+                await onUpdate(t.id, { precioActual: precio! });
+                updated++;
+              }
+            }
+          }
+        } catch {}
+      }));
+      setRefreshMsg(updated > 0 ? `✓ ${updated} precio${updated > 1 ? 's' : ''} actualizado${updated > 1 ? 's' : ''}` : '✓ Precios al día');
+    } catch { setRefreshMsg('✗ Error al actualizar'); }
+    setRefreshing(false);
+    setTimeout(() => setRefreshMsg(''), 4000);
+  };
+
+  const confirmEdit = async (id: string) => { await onUpdate(id, { precioActual: Number(editPrecio) }); setEditing(null); };
+  const confirmSell = async (id: string) => {
+    if (!sellData.precio) return;
+    await onUpdate(id, { precioVenta: Number(sellData.precio), fechaVenta: sellData.fecha });
+    setSelling(null);
+  };
+
+  const abiertas = activos.filter(a => !a.precioVenta);
+  const cerradas = activos.filter(a => a.precioVenta !== undefined);
+
+  const totalInvertido = abiertas.reduce((a, c) => a + c.precioCompra * c.cantidad, 0);
+  const totalActual = abiertas.reduce((a, c) => a + c.precioActual * c.cantidad, 0);
+  const pnlAbierto = totalActual - totalInvertido;
+  const pnlCerrado = cerradas.reduce((a, c) => a + calcPnL(c.precioCompra, c.precioVenta!, c.cantidad), 0);
+
+  const ls = { display: 'block' as const, marginBottom: '6px', fontSize: '11px', color: 'var(--muted2)', fontFamily: 'Syne, sans-serif', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const };
+
+  const editInput = (val: string, onChange: (v: string) => void, w = '90px') => (
+    <input type="number" step="0.0001" value={val} onChange={e => onChange(e.target.value)}
+      style={{ width: w, background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '13px', textAlign: 'right' }} />
+  );
+
+  const iconBtn = (onClick: () => void, icon: React.ReactNode, hoverColor: string) => (
+    <button onClick={onClick} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '3px', display: 'flex', alignItems: 'center' }}
+      onMouseOver={e => (e.currentTarget.style.color = hoverColor)}
+      onMouseOut={e => (e.currentTarget.style.color = 'var(--muted)')}>{icon}</button>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Form */}
+      <div className="card">
+        <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Nuevo Activo</div>
+        <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>Registrá el activo comprado con el capital de la caución. Precio en USD. Si el activo ya existe, suma con precio promedio ponderado.</div>
+        <form onSubmit={handleSubmit}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+            <div><label style={ls}>Tipo</label>
+              <select className="input-field" value={form.tipo} onChange={e => set('tipo', e.target.value)} style={{ cursor: 'pointer' }}>
+                {TIPO_ACTIVO_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div><label style={ls}>Ticker</label><input className="input-field" type="text" placeholder="NVDAD, S31O5, AL30D..." value={form.ticker} onChange={e => set('ticker', e.target.value.toUpperCase())} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>Cantidad</label><input className="input-field" type="number" step="0.01" placeholder="100" value={form.cantidad} onChange={e => set('cantidad', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>P. compra (USD)</label><input className="input-field" type="number" step="0.0001" placeholder="18.50" value={form.precioCompra} onChange={e => set('precioCompra', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>P. actual (USD)</label><input className="input-field" type="number" step="0.0001" placeholder="19.20" value={form.precioActual} onChange={e => set('precioActual', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+          </div>
+          {form.precioCompra && form.precioActual && form.cantidad && (
+            <div style={{ marginBottom: '12px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+              <div><span style={{ fontSize: '11px', color: 'var(--muted)' }}>P&L estimado: </span><span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: calcPnL(Number(form.precioCompra), Number(form.precioActual), Number(form.cantidad)) >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmtUSD(calcPnL(Number(form.precioCompra), Number(form.precioActual), Number(form.cantidad)))}</span></div>
+              <div><span style={{ fontSize: '11px', color: 'var(--muted)' }}>P&L %: </span><span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 600, color: Number(form.precioActual) >= Number(form.precioCompra) ? 'var(--green)' : 'var(--red)' }}>{fmtPct(calcPnLPct(Number(form.precioCompra), Number(form.precioActual)))}</span></div>
+            </div>
+          )}
+          <button type="submit" disabled={saving} className="btn-primary" style={{ width: '100%', padding: '10px', fontSize: '14px' }}>{saving ? 'Guardando...' : '+ Agregar / Sumar a posición'}</button>
+        </form>
+      </div>
+
+      {/* Cards */}
+      {activos.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '12px' }}>
+          {[
+            { label: 'INVERTIDO (ABIERTAS)', value: fmtUSD(totalInvertido), color: 'var(--text)' },
+            { label: 'VALOR ACTUAL', value: fmtUSD(totalActual), color: 'var(--amber)' },
+            { label: 'P&L NO REALIZADO', value: fmtUSD(pnlAbierto), color: pnlAbierto >= 0 ? 'var(--green)' : 'var(--red)' },
+            { label: 'P&L REALIZADO', value: fmtUSD(pnlCerrado), color: pnlCerrado >= 0 ? 'var(--green)' : 'var(--red)' },
+          ].map(card => (
+            <div key={card.label} className="card">
+              <div className="label-xs" style={{ marginBottom: '8px' }}>{card.label}</div>
+              <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '18px', fontWeight: 600, color: card.color }}>{card.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Posiciones abiertas */}
+      {abiertas.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div className="label-xs">Posiciones abiertas</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {refreshMsg && <span style={{ fontSize: '11px', fontFamily: 'DM Mono, monospace', color: refreshMsg.startsWith('✓') ? 'var(--green)' : 'var(--red)' }}>{refreshMsg}</span>}
+              <button onClick={handleRefresh} disabled={refreshing}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 14px', cursor: refreshing ? 'not-allowed' : 'pointer', color: refreshing ? 'var(--muted)' : 'var(--text2)', fontSize: '12px', fontFamily: 'Syne, sans-serif', fontWeight: 600, opacity: refreshing ? 0.6 : 1 }}
+                onMouseOver={e => { if (!refreshing) e.currentTarget.style.borderColor = 'var(--violet)'; }}
+                onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}>
+                <RefreshCw size={13} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+                {refreshing ? 'Actualizando...' : 'Actualizar precios'}
+              </button>
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                  {['Ticker','Tipo','Cant.','P. prom.','P. actual','Invertido','Valor actual','P&L USD','P&L %',''].map((h, i) => (
+                    <th key={i} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', fontSize: '11px', fontWeight: 700, fontFamily: 'Syne, sans-serif', color: 'var(--muted2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {abiertas.map(a => {
+                  const pnl = calcPnL(a.precioCompra, a.precioActual, a.cantidad);
+                  const pnlPct = calcPnLPct(a.precioCompra, a.precioActual);
+                  const isEditing = editing === a.id;
+                  const isSelling = selling === a.id;
+                  return (
+                    <tr key={a.id} style={{ borderBottom: '1px solid var(--border)' }}
+                      onMouseOver={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
+                      onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+                      <td style={{ padding: '12px 14px' }}><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--violet-light)', fontSize: '14px' }}>{a.ticker}</span></td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right' }}><span style={{ fontSize: '10px', background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px' }}>{TIPO_ACTIVO_OPTS.find(o => o.value === a.tipo)?.label || a.tipo}</span></td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtNum(a.cantidad, 2)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtUSD(a.precioCompra, 4)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right' }}>
+                        {isEditing
+                          ? editInput(editPrecio, setEditPrecio)
+                          : <span style={{ color: 'var(--text)' }}>{fmtUSD(a.precioActual, 4)}</span>}
+                      </td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtUSD(a.precioCompra * a.cantidad)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--amber)' }}>{fmtUSD(a.precioActual * a.cantidad)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: pnl >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>{fmtUSD(pnl)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: pnlPct >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{fmtPct(pnlPct)}</td>
+                      <td style={{ padding: '12px 14px' }}>
+                        {isSelling ? (
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'flex-end' }}>
+                            {editInput(sellData.precio, v => setSellData(p => ({ ...p, precio: v })))}
+                            <input type="date" value={sellData.fecha} onChange={e => setSellData(p => ({ ...p, fecha: e.target.value }))}
+                              style={{ background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '4px 8px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '12px' }} />
+                            <button onClick={() => confirmSell(a.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--green)', padding: '3px', display: 'flex', alignItems: 'center' }}><Check size={14} /></button>
+                            <button onClick={() => setSelling(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '3px', display: 'flex', alignItems: 'center' }}><X size={14} /></button>
+                          </div>
+                        ) : isEditing ? (
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            <button onClick={() => confirmEdit(a.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--green)', padding: '3px', display: 'flex', alignItems: 'center' }}><Check size={14} /></button>
+                            <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '3px', display: 'flex', alignItems: 'center' }}><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+                            {iconBtn(() => { setEditing(a.id); setEditPrecio(String(a.precioActual)); setSelling(null); }, <Pencil size={14} />, 'var(--violet-light)')}
+                            {iconBtn(() => { setSelling(a.id); setSellData({ precio: String(a.precioActual), fecha: new Date().toISOString().split('T')[0] }); setEditing(null); }, <TrendingDown size={14} />, 'var(--amber)')}
+                            {confirmDelete === a.id ? (
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <button onClick={async () => { await onDelete(a.id); setConfirmDelete(null); }} style={{ background: 'var(--red)', color: '#fff', border: 'none', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Sí</button>
+                                <button onClick={() => setConfirmDelete(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px', display: 'flex', alignItems: 'center' }}><X size={12} /></button>
+                              </div>
+                            ) : iconBtn(() => setConfirmDelete(a.id), <Trash2 size={14} />, 'var(--red)')}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Posiciones cerradas */}
+      {cerradas.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div className="label-xs">Posiciones cerradas</div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                  {['Ticker','Tipo','Cant.','P. prom.','P. venta','P&L realizado','P&L %','Fecha venta',''].map((h, i) => (
+                    <th key={i} style={{ padding: '10px 14px', textAlign: i === 0 ? 'left' : 'right', fontSize: '11px', fontWeight: 700, fontFamily: 'Syne, sans-serif', color: 'var(--muted2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {cerradas.map(a => {
+                  const pnl = calcPnL(a.precioCompra, a.precioVenta!, a.cantidad);
+                  const pnlPct = calcPnLPct(a.precioCompra, a.precioVenta!);
+                  return (
+                    <tr key={a.id} style={{ borderBottom: '1px solid var(--border)', opacity: 0.75 }}
+                      onMouseOver={e => (e.currentTarget.style.opacity = '1')}
+                      onMouseOut={e => (e.currentTarget.style.opacity = '0.75')}>
+                      <td style={{ padding: '12px 14px' }}><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--muted2)', fontSize: '14px' }}>{a.ticker}</span></td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right' }}><span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--muted2)', borderRadius: '4px', padding: '2px 6px' }}>{TIPO_ACTIVO_OPTS.find(o => o.value === a.tipo)?.label || a.tipo}</span></td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtNum(a.cantidad, 2)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtUSD(a.precioCompra, 4)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--text)' }}>{fmtUSD(a.precioVenta!, 4)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: pnl >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{fmtUSD(pnl)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: pnlPct >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{fmtPct(pnlPct)}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right', color: 'var(--muted2)', fontSize: '12px' }}>{a.fechaVenta || '—'}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'right' }}>{iconBtn(() => onDelete(a.id), <Trash2 size={14} />, 'var(--red)')}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activos.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
+          <div style={{ fontSize: '36px', marginBottom: '16px' }}>📊</div>
+          <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--text)', marginBottom: '8px' }}>Sin activos registrados</div>
+          <div style={{ fontSize: '13px', color: 'var(--muted2)' }}>Agregá los activos comprados con el capital de la caución.</div>
+        </div>
+      )}
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
 // ─── Tab: Resumen ─────────────────────────────────────────────────────────────
 
-function ResumenTab({ cauciones, periodos }: { cauciones: Caucion[]; periodos: Record<string, CaucionPeriodo[]> }) {
-  const vigentes = cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) >= 0);
-  const vencidas = cauciones.filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) < 0);
+function ResumenTab({ cauciones, periodos, activos }: {
+  cauciones: Caucion[]; periodos: Record<string, CaucionPeriodo[]>; activos: Activo[];
+}) {
+  const abiertas = activos.filter(a => !a.precioVenta);
+  const cerradas = activos.filter(a => a.precioVenta !== undefined);
 
-  const totalMonto = vigentes.reduce((a, c) => a + c.monto, 0);
-  const tnaProm = vigentes.length > 0
-    ? vigentes.reduce((a, c) => a + c.tna * c.monto, 0) / vigentes.reduce((a, c) => a + c.monto, 0)
-    : 0;
+  const totalInvertido = abiertas.reduce((a, c) => a + c.precioCompra * c.cantidad, 0);
+  const totalActual = abiertas.reduce((a, c) => a + c.precioActual * c.cantidad, 0);
+  const pnlNoRealizado = totalActual - totalInvertido;
+  const pnlRealizado = cerradas.reduce((a, c) => a + calcPnL(c.precioCompra, c.precioVenta!, c.cantidad), 0);
+  const pnlTotal = pnlNoRealizado + pnlRealizado;
 
-  const costoVigentes = vigentes.reduce((a, c) => a + calcInteresPeriodo(c.monto, c.tna, c.plazo), 0);
-  const costoHistorico = cauciones.reduce((a, c) => (periodos[c.id] ?? []).reduce((s, p) => s + p.intereses, a), 0);
-  const costoTotal = cauciones.reduce((a, c) => {
-    const hist = (periodos[c.id] ?? []).reduce((s, p) => s + p.intereses, 0);
-    return a + hist + calcInteresPeriodo(c.monto, c.tna, c.plazo);
+  const totalCostoCauciones = cauciones.reduce((total, c) => {
+    const historico = (periodos[c.id] ?? []).reduce((a, p) => a + p.intereses, 0);
+    return total + historico + calcInteresPeriodo(c.monto, c.tna, c.plazo);
   }, 0);
 
-  // Chart data: costo estimado por caución vigente
-  const chartData = vigentes.map(c => ({
-    name: c.descripcion || c.id.slice(-4),
-    costo: parseFloat(calcInteresPeriodo(c.monto, c.tna, c.plazo).toFixed(2)),
-    tna: c.tna,
-    monto: c.monto,
-  }));
+  const rendimientoNeto = pnlTotal - totalCostoCauciones;
+  const rendimientoNetoPct = totalInvertido > 0 ? (rendimientoNeto / totalInvertido) * 100 : 0;
 
-  // Próximas renovaciones
-  const proximas = [...cauciones]
-    .filter(c => calcDiasRestantes(c.fechaInicio, c.plazo) >= 0)
-    .sort((a, b) => calcDiasRestantes(a.fechaInicio, a.plazo) - calcDiasRestantes(b.fechaInicio, b.plazo))
-    .slice(0, 5);
+  // Chart 1: P&L por activo individual (abiertas)
+  const pnlPorActivo = abiertas.map(a => ({
+    name: a.ticker,
+    valor: parseFloat(calcPnL(a.precioCompra, a.precioActual, a.cantidad).toFixed(2)),
+  })).sort((a, b) => b.valor - a.valor);
+
+  // Chart 2: Resultado total de la estrategia
+  const estrategiaData = [
+    { name: 'P&L total activos', valor: parseFloat(pnlTotal.toFixed(2)), color: pnlTotal >= 0 ? '#10b981' : '#ef4444' },
+    { name: 'Costo cauciones', valor: parseFloat((-totalCostoCauciones).toFixed(2)), color: '#ef4444' },
+    { name: 'Rendimiento neto', valor: parseFloat(rendimientoNeto.toFixed(2)), color: rendimientoNeto >= 0 ? '#10b981' : '#ef4444' },
+  ];
 
   const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
+  const xAxisProps = { tick: { fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }, axisLine: false, tickLine: false };
+  const yAxisProps = { tick: { fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }, axisLine: false, tickLine: false };
 
-  if (cauciones.length === 0) return (
+  if (cauciones.length === 0 && activos.length === 0) return (
     <div className="card" style={{ textAlign: 'center', padding: '80px 20px' }}>
-      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'var(--border)', marginBottom: '16px', letterSpacing: '0.1em' }}>CAUCIONES</div>
-      <div style={{ fontSize: '14px', color: 'var(--muted)' }}>Cargá cauciones en la pestaña anterior para ver el resumen.</div>
+      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'var(--border)', marginBottom: '16px', letterSpacing: '0.1em' }}>ARB/TC</div>
+      <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '6px' }}>Todo listo para empezar.</div>
+      <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Cargá cauciones y activos en las pestañas de arriba.</div>
     </div>
   );
 
@@ -387,11 +655,11 @@ function ResumenTab({ cauciones, periodos }: { cauciones: Caucion[]; periodos: R
       {/* Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
         {[
-          { label: 'CAPITAL TOMADO', value: fmtUSD(totalMonto), sub: `${vigentes.length} posición${vigentes.length !== 1 ? 'es' : ''} vigente${vigentes.length !== 1 ? 's' : ''}`, color: 'var(--amber)' },
-          { label: 'TNA PROMEDIO', value: tnaProm.toFixed(2) + '%', sub: 'Ponderada por monto', color: 'var(--violet-light)' },
-          { label: 'COSTO PERÍODO ACT.', value: fmtUSD(costoVigentes), sub: 'Intereses en curso', color: 'var(--red)' },
-          { label: 'COSTO HISTÓRICO', value: fmtUSD(costoHistorico), sub: 'Períodos anteriores', color: 'var(--red)' },
-          { label: 'COSTO TOTAL ACUM.', value: fmtUSD(costoTotal), sub: `${vencidas.length} vencida${vencidas.length !== 1 ? 's' : ''}`, color: 'var(--red)' },
+          { label: 'P&L NO REALIZADO', value: fmtUSD(pnlNoRealizado), sub: `${abiertas.length} posición${abiertas.length !== 1 ? 'es' : ''} abierta${abiertas.length !== 1 ? 's' : ''}`, color: pnlNoRealizado >= 0 ? 'var(--green)' : 'var(--red)' },
+          { label: 'P&L REALIZADO', value: fmtUSD(pnlRealizado), sub: `${cerradas.length} posición${cerradas.length !== 1 ? 'es' : ''} cerrada${cerradas.length !== 1 ? 's' : ''}`, color: pnlRealizado >= 0 ? 'var(--green)' : 'var(--red)' },
+          { label: 'P&L TOTAL', value: fmtUSD(pnlTotal), sub: totalInvertido > 0 ? fmtPct((pnlTotal / totalInvertido) * 100) : '—', color: pnlTotal >= 0 ? 'var(--green)' : 'var(--red)' },
+          { label: 'COSTO CAUCIONES', value: fmtUSD(totalCostoCauciones), sub: `${cauciones.length} caución${cauciones.length !== 1 ? 'es' : ''}`, color: 'var(--red)' },
+          { label: 'RENDIMIENTO NETO', value: fmtUSD(rendimientoNeto), sub: fmtPct(rendimientoNetoPct), color: rendimientoNeto >= 0 ? 'var(--green)' : 'var(--red)' },
         ].map(card => (
           <div key={card.label} className="card">
             <div className="label-xs" style={{ marginBottom: '8px' }}>{card.label}</div>
@@ -401,70 +669,44 @@ function ResumenTab({ cauciones, periodos }: { cauciones: Caucion[]; periodos: R
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        {/* Chart: costo por caución */}
-        {chartData.length > 0 && (
+      {/* Charts */}
+      {abiertas.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          {/* Chart 1: P&L por activo */}
           <div className="card">
-            <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Costo estimado por caución (USD)</div>
-            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>Interés del período actual de cada posición vigente</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="name" tick={{ fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`$${v.toFixed(2)}`, 'Costo']} />
-                <Bar dataKey="costo" radius={[4, 4, 0, 0]}>
-                  {chartData.map((_, i) => <Cell key={i} fill="#ef4444" />)}
+            <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>P&L por activo (USD)</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>Ganancia o pérdida de cada posición abierta, sin contar el costo de financiamiento.</div>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={pnlPorActivo} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="name" {...xAxisProps} />
+                <YAxis {...yAxisProps} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmtUSD(v), 'P&L']} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+                <Bar dataKey="valor" name="P&L" radius={[4, 4, 0, 0]}>
+                  {pnlPorActivo.map((e, i) => <Cell key={i} fill={e.valor >= 0 ? '#10b981' : '#ef4444'} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
-        )}
 
-        {/* Próximas renovaciones */}
-        {proximas.length > 0 && (
+          {/* Chart 2: Resultado total de la estrategia */}
           <div className="card">
-            <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Próximas renovaciones</div>
-            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>Cauciones vigentes ordenadas por vencimiento</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {proximas.map(c => {
-                const dias = calcDiasRestantes(c.fechaInicio, c.plazo);
-                const diasColor = dias < 2 ? 'var(--red)' : dias < 4 ? 'var(--amber)' : 'var(--green)';
-                return (
-                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: 'var(--surface2)', borderRadius: '8px', border: `1px solid ${dias < 2 ? 'rgba(244,63,94,0.2)' : 'var(--border)'}` }}>
-                    {dias < 2 ? <AlertTriangle size={14} color="var(--red)" /> : <Clock size={14} color="var(--muted)" />}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.descripcion || `Caución ${c.id.slice(-4)}`}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{fmtUSD(c.monto)} · {c.tna.toFixed(2)}% TNA</div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, fontSize: '14px', color: diasColor }}>{dias}d</div>
-                      <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{calcVencimiento(c.fechaInicio, c.plazo)}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Resultado total de la estrategia (USD)</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>P&L total de activos vs costo de cauciones. La barra verde es lo que efectivamente ganás.</div>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={estrategiaData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="name" {...xAxisProps} />
+                <YAxis {...yAxisProps} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmtUSD(v), 'USD']} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" />
+                <Bar dataKey="valor" name="USD" radius={[4, 4, 0, 0]}>
+                  {estrategiaData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        )}
-      </div>
-
-      {/* TNA por caución */}
-      {chartData.length > 0 && (
-        <div className="card">
-          <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>TNA por caución (%)</div>
-          <div style={{ fontSize: '11px', color: 'var(--muted2)', marginBottom: '16px' }}>Comparativa de tasas entre posiciones vigentes</div>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="name" tick={{ fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: 'var(--muted2)', fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} domain={[0, 'auto']} />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v.toFixed(2)}%`, 'TNA']} />
-              <Bar dataKey="tna" radius={[4, 4, 0, 0]}>
-                {chartData.map((_, i) => <Cell key={i} fill="#7c3aed" />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
         </div>
       )}
     </div>
@@ -473,52 +715,46 @@ function ResumenTab({ cauciones, periodos }: { cauciones: Caucion[]; periodos: R
 
 // ─── Página principal ─────────────────────────────────────────────────────────
 
-type Tab = 'cauciones' | 'resumen';
+type Tab = 'cauciones' | 'activos' | 'resumen';
 
 export default function CaucionesPage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [cauciones, setCauciones] = useState<Caucion[]>([]);
   const [periodos, setPeriodos] = useState<Record<string, CaucionPeriodo[]>>({});
+  const [activos, setActivos] = useState<Activo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>('cauciones');
+  const [tab, setTab] = useState<Tab>('resumen');
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserId(user.id);
-    });
+    supabase.auth.getUser().then(({ data: { user } }) => { if (user) setUserId(user.id); });
   }, []);
 
   useEffect(() => {
     if (!userId) return;
     const load = async () => {
       setLoading(true);
-      const [caucRes, perRes] = await Promise.all([
+      const [caucRes, perRes, actRes] = await Promise.all([
         supabase.from('cauciones').select('*').eq('user_id', userId).order('created_at'),
         supabase.from('caucion_periodos').select('*').eq('user_id', userId).order('created_at'),
+        supabase.from('cedears_arb').select('*').eq('user_id', userId).order('created_at'),
       ]);
       if (caucRes.data) setCauciones(caucRes.data.map(rowToCaucion));
       if (perRes.data) {
         const grouped: Record<string, CaucionPeriodo[]> = {};
-        perRes.data.forEach(r => {
-          const p = rowToPeriodo(r);
-          if (!grouped[p.caucionId]) grouped[p.caucionId] = [];
-          grouped[p.caucionId].push(p);
-        });
+        perRes.data.forEach(r => { const p = rowToPeriodo(r); if (!grouped[p.caucionId]) grouped[p.caucionId] = []; grouped[p.caucionId].push(p); });
         setPeriodos(grouped);
       }
+      if (actRes.data) setActivos(actRes.data.map(rowToActivo));
       setLoading(false);
     };
     load();
   }, [userId]);
 
+  // Cauciones actions
   const addCaucion = useCallback(async (data: Omit<Caucion, 'id' | 'renovaciones'>) => {
     if (!userId) return;
     const id = genId();
-    const { data: row } = await supabase.from('cauciones').insert({
-      id, user_id: userId, descripcion: data.descripcion,
-      monto: data.monto, tna: data.tna, plazo: data.plazo,
-      fecha_inicio: data.fechaInicio, renovaciones: 0,
-    }).select().single();
+    const { data: row } = await supabase.from('cauciones').insert({ id, user_id: userId, descripcion: data.descripcion, monto: data.monto, tna: data.tna, plazo: data.plazo, fecha_inicio: data.fechaInicio, renovaciones: 0 }).select().single();
     if (row) setCauciones(p => [...p, rowToCaucion(row)]);
   }, [userId]);
 
@@ -528,15 +764,8 @@ export default function CaucionesPage() {
     if (!caucion) return;
     const periodoId = genId();
     const intereses = calcInteresPeriodo(caucion.monto, caucion.tna, caucion.plazo);
-    await supabase.from('caucion_periodos').insert({
-      id: periodoId, caucion_id: id, user_id: userId,
-      monto: caucion.monto, tna: caucion.tna, plazo: caucion.plazo,
-      fecha_inicio: caucion.fechaInicio, intereses,
-    });
-    const { data: row } = await supabase.from('cauciones').update({
-      monto: params.monto, tna: params.tna, plazo: params.plazo,
-      fecha_inicio: params.fechaInicio, renovaciones: caucion.renovaciones + 1,
-    }).eq('id', id).select().single();
+    await supabase.from('caucion_periodos').insert({ id: periodoId, caucion_id: id, user_id: userId, monto: caucion.monto, tna: caucion.tna, plazo: caucion.plazo, fecha_inicio: caucion.fechaInicio, intereses });
+    const { data: row } = await supabase.from('cauciones').update({ monto: params.monto, tna: params.tna, plazo: params.plazo, fecha_inicio: params.fechaInicio, renovaciones: caucion.renovaciones + 1 }).eq('id', id).select().single();
     if (row) {
       setCauciones(p => p.map(c => c.id === id ? rowToCaucion(row) : c));
       setPeriodos(p => ({ ...p, [id]: [...(p[id] ?? []), { id: periodoId, caucionId: id, monto: caucion.monto, tna: caucion.tna, plazo: caucion.plazo, fechaInicio: caucion.fechaInicio, intereses }] }));
@@ -551,6 +780,40 @@ export default function CaucionesPage() {
     setPeriodos(p => { const next = { ...p }; delete next[id]; return next; });
   }, [userId]);
 
+  // Activos actions
+  const addActivo = useCallback(async (data: Omit<Activo, 'id'>) => {
+    if (!userId) return;
+    // Buscar posición abierta existente con el mismo ticker
+    const existing = activos.find(a => a.ticker === data.ticker && !a.precioVenta);
+    if (existing) {
+      const totalCantidad = existing.cantidad + data.cantidad;
+      const precioPromedio = (existing.cantidad * existing.precioCompra + data.cantidad * data.precioCompra) / totalCantidad;
+      await supabase.from('cedears_arb').update({ cantidad: totalCantidad, precio_compra: precioPromedio, precio_actual: data.precioActual }).eq('id', existing.id).eq('user_id', userId);
+      setActivos(p => p.map(a => a.id === existing.id ? { ...a, cantidad: totalCantidad, precioCompra: precioPromedio, precioActual: data.precioActual } : a));
+    } else {
+      const id = genId();
+      const { data: row } = await supabase.from('cedears_arb').insert({ id, user_id: userId, ticker: data.ticker, tipo: data.tipo, cantidad: data.cantidad, precio_compra: data.precioCompra, precio_actual: data.precioActual }).select().single();
+      if (row) setActivos(p => [...p, rowToActivo(row)]);
+    }
+  }, [userId, activos]);
+
+  const updateActivo = useCallback(async (id: string, data: Partial<Omit<Activo, 'id'>>) => {
+    if (!userId) return;
+    const updates: Record<string, unknown> = {};
+    if (data.precioActual !== undefined) updates.precio_actual = data.precioActual;
+    if (data.precioVenta !== undefined) updates.precio_venta = data.precioVenta;
+    if (data.fechaVenta !== undefined) updates.fecha_venta = data.fechaVenta;
+    if (data.cantidad !== undefined) updates.cantidad = data.cantidad;
+    await supabase.from('cedears_arb').update(updates).eq('id', id).eq('user_id', userId);
+    setActivos(p => p.map(a => a.id === id ? { ...a, ...data } : a));
+  }, [userId]);
+
+  const deleteActivo = useCallback(async (id: string) => {
+    if (!userId) return;
+    await supabase.from('cedears_arb').delete().eq('id', id).eq('user_id', userId);
+    setActivos(p => p.filter(a => a.id !== id));
+  }, [userId]);
+
   if (loading) return (
     <div style={{ maxWidth: '1100px', marginTop: '60px', textAlign: 'center' }}>
       <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando cauciones...</div>
@@ -559,35 +822,23 @@ export default function CaucionesPage() {
 
   return (
     <div style={{ maxWidth: '1100px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Cauciones</h1>
-          <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Gestión de cauciones tomadoras y seguimiento de costos.</div>
-        </div>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Cauciones</h1>
+        <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Estrategia de cauciones tomadoras · seguimiento del capital y rendimiento.</div>
       </div>
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', width: 'fit-content' }}>
-        {[{ key: 'cauciones' as Tab, label: 'Cauciones', icon: '📋' }, { key: 'resumen' as Tab, label: 'Resumen', icon: '📊' }].map(t => (
+        {[{ key: 'resumen' as Tab, label: 'Resumen', icon: '📊' }, { key: 'cauciones' as Tab, label: 'Cauciones', icon: '📋' }, { key: 'activos' as Tab, label: 'Activos', icon: '💼' }].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', transition: 'all 0.15s' }}>
             <span>{t.icon}</span> {t.label}
           </button>
         ))}
       </div>
 
-      {tab === 'cauciones' && (
-        <CaucionesTab
-          cauciones={cauciones}
-          periodos={periodos}
-          onAdd={addCaucion}
-          onRenovar={renovarCaucion}
-          onDelete={deleteCaucion}
-        />
-      )}
-
-      {tab === 'resumen' && (
-        <ResumenTab cauciones={cauciones} periodos={periodos} />
-      )}
+      {tab === 'resumen' && <ResumenTab cauciones={cauciones} periodos={periodos} activos={activos} />}
+      {tab === 'cauciones' && <CaucionesTab cauciones={cauciones} periodos={periodos} onAdd={addCaucion} onRenovar={renovarCaucion} onDelete={deleteCaucion} />}
+      {tab === 'activos' && <ActivosTab activos={activos} onAdd={addActivo} onUpdate={updateActivo} onDelete={deleteActivo} />}
     </div>
   );
 }
