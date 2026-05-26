@@ -20,7 +20,14 @@ interface PosicionBase {
 }
 interface PosicionCompleta extends PosicionBase {
   costoPromedioUSD: number; precioActual: number | null; valorActualUSD: number | null;
-  pnlUSD: number | null; pnlPct: number | null; variacionDiaria: number | null; loadingPrecio: boolean;
+  pnlUSD: number | null; pnlPct: number | null; variacionDiaria: number | null;
+  loadingPrecio: boolean; esVencido?: boolean;
+}
+interface GananciaRealizada {
+  ticker: string; nombre: string; tipo_activo: string;
+  montoVentaUSD: number; costoRealizadoUSD: number;
+  gananciaUSD: number; gananciaPct: number;
+  cantidadVendida: number; vencido?: boolean;
 }
 interface OpImportada {
   importId: string;
@@ -44,6 +51,19 @@ const TIPO_LABELS: Record<string, string> = { cedear: 'CEDEAR', accion_ar: 'Acci
 const TIPO_COLORS_OP: Record<string, string> = { compra: 'var(--green)', venta: 'var(--red)', dividendo: 'var(--violet-light)', deposito: '#06b6d4', retiro: 'var(--amber)' };
 const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
 
+// ─── Constantes de activos ────────────────────────────────────────────────────
+
+const NO_NORMALIZAR_D = new Set(['YPFD', 'NDD']);
+const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
+const AR_STOCKS = new Set(['GGAL','YPFD','PAMP','TXAR','ALUA','BMA','LOMA','TECO','CEPU','VALO','CRES','IRCP','METR','COME','HARG','RICH','AGRO','SEMI','SUPV','BBAR','BYMA','NQNF','OEST']);
+
+function normalizarTicker(ticker: string): string {
+  const upper = ticker.toUpperCase();
+  if (NO_NORMALIZAR_D.has(upper)) return upper;
+  if (upper.endsWith('D') && upper.length > 2) return upper.slice(0, -1);
+  return upper;
+}
+
 // ─── Helpers de cálculo ───────────────────────────────────────────────────────
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
@@ -61,9 +81,39 @@ function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number 
 function pnlColor(pct: number | null): string {
   if (pct == null) return '#475569';
   if (pct >= 30) return '#15803d'; if (pct >= 15) return '#22c55e';
-  if (pct >= 5)  return '#86efac'; if (pct >= -5)  return '#64748b';
+  if (pct >= 5) return '#86efac'; if (pct >= -5) return '#64748b';
   if (pct >= -15) return '#f87171'; if (pct >= -30) return '#ef4444';
   return '#991b1b';
+}
+
+function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
+  const map = new Map<string, PosicionBase>();
+  for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
+    const tickerKey = normalizarTicker(op.ticker);
+    if (!map.has(tickerKey)) {
+      map.set(tickerKey, { ticker: tickerKey, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
+    }
+    const pos = map.get(tickerKey)!;
+    if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
+    else if (op.tipo === 'venta' && pos.cantidad > 0) {
+      const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
+      pos.costoTotalUSD *= (1 - pct); pos.cantidad -= (op.cantidad || 0);
+    }
+  }
+  Array.from(map.keys()).forEach(k => { if (map.get(k)!.cantidad <= 0.000001) map.delete(k); });
+  return map;
+}
+
+function calcularEfectivoUSD(ops: Operacion[]): number {
+  let e = 0;
+  for (const op of ops) {
+    if (op.tipo === 'deposito') e += op.monto_usd;
+    else if (op.tipo === 'retiro') e -= op.monto_usd;
+    else if (op.tipo === 'compra') e -= op.monto_usd;
+    else if (op.tipo === 'venta') e += op.monto_usd;
+    else if (op.tipo === 'dividendo') e += op.monto_usd;
+  }
+  return Math.max(0, e);
 }
 
 function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}): GananciaRealizada[] {
@@ -95,7 +145,6 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
     }
   }
 
-  // Activos con posición remanente que ya vencieron → realizadas automáticamente
   const hoy = new Date();
   for (const [key, base] of Array.from(bases.entries())) {
     if (base.cantidad <= 0.000001) continue;
@@ -111,36 +160,6 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
   return Array.from(realizadasMap.values())
     .map(r => ({ ...r, gananciaPct: r.costoRealizadoUSD > 0 ? (r.gananciaUSD / r.costoRealizadoUSD) * 100 : 0 }))
     .sort((a, b) => b.gananciaUSD - a.gananciaUSD);
-}
-
-function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
-  const map = new Map<string, PosicionBase>();
-  for (const op of ops.filter(o => o.tipo === 'compra' || o.tipo === 'venta')) {
-    const tickerKey = normalizarTicker(op.ticker);
-    if (!map.has(tickerKey)) {
-      map.set(tickerKey, { ticker: tickerKey, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
-    }
-    const pos = map.get(tickerKey)!;
-    if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
-    else if (op.tipo === 'venta' && pos.cantidad > 0) {
-      const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
-      pos.costoTotalUSD *= (1 - pct); pos.cantidad -= (op.cantidad || 0);
-    }
-  }
-  Array.from(map.keys()).forEach(k => { if (map.get(k)!.cantidad <= 0.000001) map.delete(k); });
-  return map;
-}
-
-function calcularEfectivoUSD(ops: Operacion[]): number {
-  let e = 0;
-  for (const op of ops) {
-    if (op.tipo === 'deposito') e += op.monto_usd;
-    else if (op.tipo === 'retiro')    e -= op.monto_usd;
-    else if (op.tipo === 'compra')    e -= op.monto_usd;
-    else if (op.tipo === 'venta')     e += op.monto_usd;
-    else if (op.tipo === 'dividendo') e += op.monto_usd;
-  }
-  return Math.max(0, e);
 }
 
 async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: number | null; precioOriginal: number | null; moneda: string; variacion: number | null; vencimiento: string | null }> {
@@ -159,9 +178,6 @@ async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: nu
 
 // ─── Parsers de importación ───────────────────────────────────────────────────
 
-const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDD','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','NUD','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
-const AR_STOCKS = new Set(['GGAL','YPFD','PAMP','TXAR','ALUA','BMA','LOMA','TECO','CEPU','VALO','CRES','IRCP','METR','COME','HARG','RICH','AGRO','SEMI','SUPV','BBAR','BYMA','NQNF','OEST']);
-
 function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): string {
   if (tipoInstrumento) {
     const t = tipoInstrumento.toLowerCase();
@@ -170,10 +186,10 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
     if (t.includes('renta fija') || t.includes('bono') || t.includes('soberan') || t.includes('negociable')) return 'bono';
   }
   const upper = ticker.toUpperCase();
-  const base = upper.endsWith('D') && upper.length > 2 ? upper.slice(0, -1) : upper;
+  const base = normalizarTicker(upper);
   if (BONOS_SET.has(upper) || BONOS_SET.has(base)) return 'bono';
   if (AR_STOCKS.has(upper) || AR_STOCKS.has(base)) return 'accion_ar';
-  if (upper.endsWith('D') && upper.length > 2) return 'cedear';
+  if (upper.endsWith('D') && upper.length > 2 && !NO_NORMALIZAR_D.has(upper)) return 'cedear';
   return 'cedear';
 }
 
@@ -198,22 +214,14 @@ function parseIOLDate(s: string): string {
 }
 
 function parseIOLTipoMov(tipoMov: string): { tipo: 'compra' | 'venta' | 'dividendo' | 'deposito' | 'retiro'; ticker: string } | null {
-  if (tipoMov.startsWith('Compra(')) {
-    return { tipo: 'compra', ticker: tipoMov.slice(7, -1).trim() };
-  }
-  if (tipoMov.startsWith('Venta(')) {
-    return { tipo: 'venta', ticker: tipoMov.slice(6, -1).trim() };
-  }
+  if (tipoMov.startsWith('Compra(')) return { tipo: 'compra', ticker: tipoMov.slice(7, -1).trim() };
+  if (tipoMov.startsWith('Venta(')) return { tipo: 'venta', ticker: tipoMov.slice(6, -1).trim() };
   if (tipoMov.startsWith('Pago de Dividendos(')) {
     const inner = tipoMov.slice('Pago de Dividendos('.length, -1).replace(/ US\$$/, '').trim();
     return { tipo: 'dividendo', ticker: inner };
   }
-  if (tipoMov.startsWith('Depósito de Fondos') || tipoMov.startsWith('Deposito de Fondos') || tipoMov === 'Crédito') {
-    return { tipo: 'deposito', ticker: 'EFECTIVO' };
-  }
-  if (tipoMov.startsWith('Extracción de Fondos') || tipoMov.startsWith('Extraccion de Fondos')) {
-    return { tipo: 'retiro', ticker: 'EFECTIVO' };
-  }
+  if (tipoMov.startsWith('Depósito de Fondos') || tipoMov.startsWith('Deposito de Fondos') || tipoMov === 'Crédito') return { tipo: 'deposito', ticker: 'EFECTIVO' };
+  if (tipoMov.startsWith('Extracción de Fondos') || tipoMov.startsWith('Extraccion de Fondos')) return { tipo: 'retiro', ticker: 'EFECTIVO' };
   return null;
 }
 
@@ -222,10 +230,8 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
   const doc = parser.parseFromString(html, 'text/html');
   const table = doc.querySelector('table');
   if (!table) throw new Error('No se encontró la tabla en el archivo IOL');
-
   const allRows = Array.from(table.querySelectorAll('tr'));
   if (!allRows.length) throw new Error('Tabla vacía');
-
   const headers = Array.from(allRows[0].querySelectorAll('th,td')).map(td => td.textContent?.trim() || '');
   const rawRows = allRows.slice(1).map(row => {
     const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
@@ -243,67 +249,48 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate' | 
   }
 
   const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
-
   for (const [boleto, rows] of Array.from(groups.entries())) {
     const tipoMov = rows[0]['Tipo Mov.'] || '';
     const opInfo = parseIOLTipoMov(tipoMov);
     if (!opInfo) continue;
-
     const { tipo, ticker } = opInfo;
     const esCash = tipo === 'deposito' || tipo === 'retiro';
-
-    let moneda: 'USD' | 'ARS' = 'ARS';
-    let monto_usd = 0;
-    let precio_unitario: number | null = null;
-    let cantidad: number | null = null;
-    let fecha = '';
-
+    let moneda: 'USD' | 'ARS' = 'ARS', monto_usd = 0, precio_unitario: number | null = null, cantidad: number | null = null, fecha = '';
     if (esCash) {
       const row = rows[0];
       const montoARS = parseIOLMonto(row['Monto']);
       if (!montoARS) continue;
-      monto_usd = montoARS / mep;
-      moneda = 'ARS';
+      monto_usd = montoARS / mep; moneda = 'ARS';
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
     } else {
       const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
       const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
-
       if (usdRow) {
-        moneda = 'USD';
-        monto_usd = parseIOLMonto(usdRow['Monto']);
+        moneda = 'USD'; monto_usd = parseIOLMonto(usdRow['Monto']);
         precio_unitario = parseFloat(String(usdRow['Precio']).replace(',', '.')) || null;
         cantidad = parseFloat(usdRow['Cant. titulos']) || null;
         fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']);
       } else if (arsRow) {
         moneda = 'ARS';
-        const montoARS = parseIOLMonto(arsRow['Monto']);
-        monto_usd = montoARS / mep;
+        monto_usd = parseIOLMonto(arsRow['Monto']) / mep;
         precio_unitario = parseFloat(String(arsRow['Precio']).replace(',', '.')) || null;
         cantidad = parseFloat(arsRow['Cant. titulos']) || null;
         fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']);
       } else { continue; }
     }
-
     if (!monto_usd || !fecha) continue;
-
     const esCashOp = tipo === 'deposito' || tipo === 'retiro';
     result.push({
-      importId: `IOL-${boleto}`,
-      fecha,
+      importId: `IOL-${boleto}`, fecha,
       ticker: esCashOp ? 'EFECTIVO' : ticker,
       nombre: esCashOp ? (tipo === 'deposito' ? 'Depósito' : 'Retiro') : ticker,
-      tipo,
-      cantidad: esCashOp ? null : cantidad,
+      tipo, cantidad: esCashOp ? null : cantidad,
       precio_unitario: esCashOp ? null : precio_unitario,
-      monto_usd,
-      moneda,
+      monto_usd, moneda,
       tipo_activo: esCashOp ? 'efectivo' : detectTipoActivo(ticker),
-      broker: 'IOL',
-      notas: null,
+      broker: 'IOL', notas: null,
     });
   }
-
   return result;
 }
 
@@ -316,10 +303,7 @@ function parseXLSXDate(val: any): string {
     return val;
   }
   if (typeof val === 'number') {
-    try {
-      const info = (XLSX.SSF as any).parse_date_code(val);
-      return `${info.y}-${String(info.m).padStart(2,'0')}-${String(info.d).padStart(2,'0')}`;
-    } catch { return ''; }
+    try { const info = (XLSX.SSF as any).parse_date_code(val); return `${info.y}-${String(info.m).padStart(2, '0')}-${String(info.d).padStart(2, '0')}`; } catch { return ''; }
   }
   return '';
 }
@@ -328,10 +312,8 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: null });
-
   const boletoGroups = new Map<string, any[]>();
   const dividendRows: any[] = [];
-
   for (const row of rows) {
     const desc = String(row['Descripcion'] || '');
     const bm = desc.match(/^Boleto\s*\/\s*(\d+)\s*\/\s*(COMPRA|VENTA)\s*\/[^/]*\/\s*([A-Z0-9.]+)/i);
@@ -344,43 +326,25 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     const dm = desc.match(/^Dividendo en efectivo\s*\/\s*(.+)/i);
     if (dm) dividendRows.push({ ...row, _ticker: dm[1].trim() });
   }
-
   const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
-
   for (const [boleto, rows] of Array.from(boletoGroups.entries())) {
     const { _tipo: tipo, _ticker: ticker } = rows[0];
     const tipoInstr = rows[0]['Tipo de Instrumento'] || null;
-
-    const usdRow = rows.find(r => {
-      const m = String(r['Moneda'] || '');
-      return (m.includes('Dólar') || m.includes('Dollar')) && Math.abs(r['Importe'] || 0) > 0;
-    });
+    const usdRow = rows.find(r => { const m = String(r['Moneda'] || ''); return (m.includes('Dólar') || m.includes('Dollar')) && Math.abs(r['Importe'] || 0) > 0; });
     const arsRow = rows.find(r => String(r['Moneda'] || '').includes('Pesos') && Math.abs(r['Importe'] || 0) > 0);
     const baseRow = usdRow || arsRow;
     if (!baseRow) continue;
-
     const esUSD = !!usdRow;
     const importe = Math.abs((esUSD ? usdRow : arsRow)!['Importe'] || 0);
     if (!importe) continue;
-
     const monto_usd = esUSD ? importe : importe / mep;
     const moneda: 'USD' | 'ARS' = esUSD ? 'USD' : 'ARS';
     const cantidad = Math.abs(baseRow['Cantidad'] || 0) || null;
     const precio = (baseRow['Precio'] > 0) ? baseRow['Precio'] : null;
     const fecha = parseXLSXDate(baseRow['Concertacion']);
     if (!fecha) continue;
-
-    result.push({
-      importId: `BAL-${boleto}`,
-      fecha, ticker, nombre: ticker,
-      tipo: tipo as any,
-      cantidad, precio_unitario: precio,
-      monto_usd, moneda,
-      tipo_activo: detectTipoActivo(ticker, tipoInstr),
-      broker: 'Balanz', notas: null,
-    });
+    result.push({ importId: `BAL-${boleto}`, fecha, ticker, nombre: ticker, tipo: tipo as any, cantidad, precio_unitario: precio, monto_usd, moneda, tipo_activo: detectTipoActivo(ticker, tipoInstr), broker: 'Balanz', notas: null });
   }
-
   const divGrouped = new Map<string, any[]>();
   for (const row of dividendRows) {
     const fecha = parseXLSXDate(row['Concertacion']);
@@ -388,39 +352,20 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     if (!divGrouped.has(key)) divGrouped.set(key, []);
     divGrouped.get(key)!.push(row);
   }
-
   for (const [key, rows] of Array.from(divGrouped.entries())) {
-    const usdRow = rows.find(r => {
-      const m = String(r['Moneda'] || '');
-      return (m.includes('Dólar') || m.includes('Dollar')) && (r['Importe'] || 0) > 0;
-    });
+    const usdRow = rows.find(r => { const m = String(r['Moneda'] || ''); return (m.includes('Dólar') || m.includes('Dollar')) && (r['Importe'] || 0) > 0; });
     if (!usdRow) continue;
     const ticker = usdRow['_ticker'];
     const fecha = parseXLSXDate(usdRow['Concertacion']);
     const importe = usdRow['Importe'];
     if (!fecha || !importe) continue;
-    result.push({
-      importId: `BAL-DIV-${key}`,
-      fecha, ticker, nombre: ticker,
-      tipo: 'dividendo',
-      cantidad: null, precio_unitario: null,
-      monto_usd: importe, moneda: 'USD',
-      tipo_activo: detectTipoActivo(ticker, usdRow['Tipo de Instrumento']),
-      broker: 'Balanz', notas: null,
-    });
+    result.push({ importId: `BAL-DIV-${key}`, fecha, ticker, nombre: ticker, tipo: 'dividendo', cantidad: null, precio_unitario: null, monto_usd: importe, moneda: 'USD', tipo_activo: detectTipoActivo(ticker, usdRow['Tipo de Instrumento']), broker: 'Balanz', notas: null });
   }
-
   return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 
 function isDuplicateOp(op: Omit<OpImportada, 'isDuplicate' | 'selected'>, existing: Operacion[]): boolean {
-  return existing.some(e =>
-    e.fecha === op.fecha &&
-    e.ticker === op.ticker &&
-    e.tipo === op.tipo &&
-    e.monto_usd > 0 &&
-    Math.abs(e.monto_usd - op.monto_usd) / e.monto_usd < 0.03
-  );
+  return existing.some(e => e.fecha === op.fecha && e.ticker === op.ticker && e.tipo === op.tipo && e.monto_usd > 0 && Math.abs(e.monto_usd - op.monto_usd) / e.monto_usd < 0.03);
 }
 
 // ─── Componentes UI base ──────────────────────────────────────────────────────
@@ -496,9 +441,7 @@ function TabPosiciones({ posiciones, efectivoUSD }: { posiciones: PosicionComple
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500 }}>{p.loadingPrecio ? '...' : p.pnlUSD != null ? (p.pnlUSD >= 0 ? '+' : '') + fmtUSD(p.pnlUSD) : '—'}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  <span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span>
-                </td>
+                <td style={{ padding: '12px 16px', textAlign: 'right' }}><span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span></td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted2)', fontSize: '12px' }}>{p.broker}</td>
               </tr>
             ))}
@@ -590,7 +533,6 @@ function TabDistribucion({ posiciones, efectivoUSD }: { posiciones: PosicionComp
 function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionCompleta[]; realizadas: GananciaRealizada[] }) {
   const totalRealizada = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
   const totalNoRealizada = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
-
   const sortedPos = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
   const top = sortedPos.slice(0, 5);
   const bot = sortedPos.slice(-5).reverse();
@@ -609,7 +551,7 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
       <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: r.gananciaUSD >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: r.gananciaUSD >= 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
       <div style={{ flex: 1 }}>
         <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{r.ticker}</span>
-        {r.vencido && <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--muted)', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '1px 5px' }}>vencido</span>}
+        {r.vencido && <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--muted)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '4px', padding: '1px 5px' }}>vencido</span>}
       </div>
       <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--muted)' }}>{fmtUSD(r.gananciaUSD)}</span>
       <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: colorV(r.gananciaUSD), fontWeight: 600 }}>{fmtPct(r.gananciaPct)}</span>
@@ -618,36 +560,24 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-      {/* Resumen realizada vs no realizada */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        <div className="card" style={{ borderColor: colorV(totalNoRealizada) === 'var(--green)' ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
+        <div className="card" style={{ borderColor: totalNoRealizada >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
           <div className="label-xs" style={{ marginBottom: '8px' }}>📊 NO REALIZADA</div>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalNoRealizada) }}>{totalNoRealizada >= 0 ? '+' : ''}{fmtUSD(totalNoRealizada)}</div>
           <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones abiertas</div>
         </div>
-        <div className="card" style={{ borderColor: colorV(totalRealizada) === 'var(--green)' ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
+        <div className="card" style={{ borderColor: totalRealizada >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
           <div className="label-xs" style={{ marginBottom: '8px' }}>✅ REALIZADA</div>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalRealizada) }}>{totalRealizada >= 0 ? '+' : ''}{fmtUSD(totalRealizada)}</div>
           <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones cerradas</div>
         </div>
       </div>
-
-      {/* No realizadas */}
       {sortedPos.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-          <div className="card">
-            <div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>
-            {top.map((p, i) => renderPosItem(p, i, true))}
-          </div>
-          <div className="card">
-            <div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>
-            {bot.map((p, i) => renderPosItem(p, i, false))}
-          </div>
+          <div className="card"><div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>{top.map((p, i) => renderPosItem(p, i, true))}</div>
+          <div className="card"><div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>{bot.map((p, i) => renderPosItem(p, i, false))}</div>
         </div>
       )}
-
-      {/* Realizadas */}
       {realizadas.length > 0 && (
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>✅ Posiciones cerradas / realizadas</div>
@@ -684,7 +614,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
         await Promise.all(tickers.map(async ticker => {
           try {
-            const base = ticker.endsWith('D') && ticker.length > 2 ? ticker.slice(0, -1) : ticker;
+            const base = normalizarTicker(ticker);
             const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=1y`);
             const data = await res.json();
             if (!data.error && data.historico?.length) historicos[ticker] = data.historico;
@@ -725,16 +655,12 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
           const ultimoValor = puntos[puntos.length - 1].valor;
           if (ultimoValor > 0) {
             const factor = valorActualIol / ultimoValor;
-            puntos.forEach(p => {
-              p.valor = Math.round(p.valor * factor * 100) / 100;
-              p.rendimiento = p.invertido > 0 ? +((p.valor - p.invertido) / p.invertido * 100).toFixed(2) : 0;
-            });
+            puntos.forEach(p => { p.valor = Math.round(p.valor * factor * 100) / 100; p.rendimiento = p.invertido > 0 ? +((p.valor - p.invertido) / p.invertido * 100).toFixed(2) : 0; });
           }
         }
         const diaAntes = new Date(primeraFecha + 'T12:00:00');
         diaAntes.setDate(diaAntes.getDate() - 1);
-        const zeroPt = { fecha: diaAntes.toISOString().split('T')[0], valor: 0, invertido: 0, rendimiento: 0 };
-        setDatos([zeroPt, ...puntos]);
+        setDatos([{ fecha: diaAntes.toISOString().split('T')[0], valor: 0, invertido: 0, rendimiento: 0 }, ...puntos]);
       } catch { setError('Error al cargar los datos históricos.'); }
       setLoading(false);
     };
@@ -763,7 +689,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
       </div>
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div><div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Anclado al valor actual de IOL · tendencia basada en el subyacente</div></div>
+          <div><div className="label-xs" style={{ marginBottom: '4px' }}>💰 Evolución del capital</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>Anclado al valor actual · tendencia basada en el subyacente</div></div>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '2px', background: '#7c3aed' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Portfolio</span></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '20px', height: '0', borderTop: '2px dashed #06b6d4' }} /><span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Invertido</span></div>
@@ -773,7 +699,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
           <LineChart data={display} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis {...xAxisProps} />
-            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
+            <YAxis tick={{ fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }} tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={55} />
             <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [fmtUSD(v), name === 'valor' ? 'Portfolio' : 'Invertido']} labelFormatter={labelFmt} />
             <Line type="monotone" dataKey="valor" stroke="#7c3aed" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="invertido" stroke="#06b6d4" strokeWidth={1.5} dot={false} strokeDasharray="5 4" />
@@ -810,7 +736,7 @@ function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Oper
           <div className="label-xs">📝 Historial de operaciones</div>
           <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>{operaciones.length} operaciones registradas</div>
         </div>
-        <button onClick={onImport} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+        <button onClick={onImport} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
           <Upload size={14} /> Importar CSV
         </button>
       </div>
@@ -867,37 +793,24 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
   const [notas, setNotas] = useState('');
   const [montoDirecto, setMontoDirecto] = useState('');
   const [saving, setSaving] = useState(false);
-
   const isAssetOp = tipo === 'compra' || tipo === 'venta';
   const isCashOp = tipo === 'deposito' || tipo === 'retiro' || tipo === 'dividendo';
-
   const calcMontoUSD = () => {
     if (isCashOp) { const m = parseFloat(montoDirecto); return isNaN(m) ? 0 : moneda === 'ARS' ? m / mep : m; }
     const q = parseFloat(cantidad), p = parseFloat(precioUnitario);
     if (isNaN(q) || isNaN(p)) return 0;
     return moneda === 'ARS' ? (q * p) / mep : q * p;
   };
-
   const montoUSDPreview = calcMontoUSD();
   const canSave = isCashOp ? parseFloat(montoDirecto) > 0 : ticker.trim() && parseFloat(cantidad) > 0 && parseFloat(precioUnitario) > 0;
-
   const handleSave = async () => {
     const monto_usd = calcMontoUSD();
     if (monto_usd <= 0) return;
     setSaving(true);
-    await onSave({
-      fecha, ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO',
-      nombre: isAssetOp ? ticker.toUpperCase().trim() : tipo === 'dividendo' ? ticker.toUpperCase().trim() : (tipo === 'deposito' ? 'Depósito' : 'Retiro'),
-      tipo, cantidad: isAssetOp ? parseFloat(cantidad) || null : null,
-      precio_unitario: isAssetOp ? parseFloat(precioUnitario) || null : null,
-      monto_usd, moneda, tipo_activo: isAssetOp ? tipoActivo : 'efectivo',
-      broker: broker || null, notas: notas || null,
-    });
+    await onSave({ fecha, ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO', nombre: isAssetOp ? ticker.toUpperCase().trim() : tipo === 'dividendo' ? ticker.toUpperCase().trim() : (tipo === 'deposito' ? 'Depósito' : 'Retiro'), tipo, cantidad: isAssetOp ? parseFloat(cantidad) || null : null, precio_unitario: isAssetOp ? parseFloat(precioUnitario) || null : null, monto_usd, moneda, tipo_activo: isAssetOp ? tipoActivo : 'efectivo', broker: broker || null, notas: notas || null });
     setSaving(false);
   };
-
   const ls = { display: 'block' as const, marginBottom: '6px' };
-
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
       <div className="card" style={{ width: '100%', maxWidth: '520px', maxHeight: '92vh', overflowY: 'auto' }}>
@@ -945,12 +858,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
 
 type BrokerType = 'IOL' | 'Balanz';
 
-function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: {
-  operacionesExistentes: Operacion[];
-  mep: number;
-  onClose: () => void;
-  onImport: (ops: Omit<Operacion, 'id'>[]) => Promise<void>;
-}) {
+function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: { operacionesExistentes: Operacion[]; mep: number; onClose: () => void; onImport: (ops: Omit<Operacion, 'id'>[]) => Promise<void> }) {
   const [broker, setBroker] = useState<BrokerType>('IOL');
   const [ops, setOps] = useState<OpImportada[]>([]);
   const [loading, setLoading] = useState(false);
@@ -963,29 +871,16 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
     setLoading(true); setError(''); setOps([]);
     try {
       let parsed: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
-      if (broker === 'IOL') {
-        const text = await file.text();
-        parsed = parseIOL(text, mep);
-      } else {
-        const buffer = await file.arrayBuffer();
-        parsed = parseBalanz(buffer, mep);
-      }
+      if (broker === 'IOL') { const text = await file.text(); parsed = parseIOL(text, mep); }
+      else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep); }
       if (!parsed.length) { setError('No se encontraron operaciones de compra, venta o dividendo en el archivo.'); setLoading(false); return; }
-      const withFlags = parsed.map(op => ({
-        ...op,
-        isDuplicate: isDuplicateOp(op, operacionesExistentes),
-        selected: !isDuplicateOp(op, operacionesExistentes),
-      }));
-      setOps(withFlags);
-    } catch (e: any) {
-      setError(e?.message || `Error al leer el archivo. Verificá que sea el formato correcto de ${broker}.`);
-    }
+      setOps(parsed.map(op => ({ ...op, isDuplicate: isDuplicateOp(op, operacionesExistentes), selected: !isDuplicateOp(op, operacionesExistentes) })));
+    } catch (e: any) { setError(e?.message || `Error al leer el archivo. Verificá que sea el formato correcto de ${broker}.`); }
     setLoading(false);
   }, [broker, mep, operacionesExistentes]);
 
   const toggleAll = (val: boolean) => setOps(prev => prev.map(o => ({ ...o, selected: o.isDuplicate ? false : val })));
   const toggleOne = (id: string) => setOps(prev => prev.map(o => o.importId === id && !o.isDuplicate ? { ...o, selected: !o.selected } : o));
-
   const selectedOps = ops.filter(o => o.selected);
   const dupCount = ops.filter(o => o.isDuplicate).length;
   const newCount = ops.filter(o => !o.isDuplicate).length;
@@ -993,25 +888,18 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
   const handleSave = async () => {
     if (!selectedOps.length) return;
     setSaving(true);
-    try {
-      const toSave = selectedOps.map(({ importId, isDuplicate, selected, ...op }) => op);
-      await onImport(toSave);
-      setSaved(true);
-    } catch { setError('Error al guardar las operaciones.'); }
+    try { await onImport(selectedOps.map(({ importId, isDuplicate, selected, ...op }) => op)); setSaved(true); }
+    catch { setError('Error al guardar las operaciones.'); }
     setSaving(false);
   };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '820px', maxHeight: '92vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <div className="card" style={{ width: '100%', maxWidth: '820px', maxHeight: '92vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <div>
-            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Importar desde broker</div>
-            <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>Compras, ventas y dividendos. Las cauciones se ignoran automáticamente.</div>
-          </div>
+          <div><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Importar desde broker</div><div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>Compras, ventas y dividendos. Las cauciones se ignoran automáticamente.</div></div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
         </div>
-
         {saved ? (
           <div style={{ textAlign: 'center', padding: '40px 20px' }}>
             <CheckCircle2 size={48} color="var(--green)" style={{ margin: '0 auto 16px' }} />
@@ -1025,77 +913,48 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
               <div>
                 <div className="label-xs" style={{ marginBottom: '8px' }}>Broker</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  {(['IOL', 'Balanz'] as BrokerType[]).map(b => (
-                    <button key={b} onClick={() => { setBroker(b); setOps([]); setError(''); }} style={{ flex: 1, background: broker === b ? 'var(--violet)' : 'var(--surface2)', color: broker === b ? '#fff' : 'var(--text2)', border: `1px solid ${broker === b ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', transition: 'all 0.15s' }}>{b}</button>
-                  ))}
+                  {(['IOL', 'Balanz'] as BrokerType[]).map(b => (<button key={b} onClick={() => { setBroker(b); setOps([]); setError(''); }} style={{ flex: 1, background: broker === b ? 'var(--violet)' : 'var(--surface2)', color: broker === b ? '#fff' : 'var(--text2)', border: `1px solid ${broker === b ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', transition: 'all 0.15s' }}>{b}</button>))}
                 </div>
               </div>
               <div>
                 <div className="label-xs" style={{ marginBottom: '8px' }}>Archivo {broker === 'IOL' ? '(.xls exportado de IOL)' : '(.xlsx exportado de Balanz)'}</div>
-                <button onClick={() => fileRef.current?.click()} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+                <button onClick={() => fileRef.current?.click()} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
                   <Upload size={15} /> Seleccionar archivo
                 </button>
                 <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
               </div>
             </div>
-
             {!ops.length && !loading && !error && (
               <div style={{ padding: '20px', background: 'var(--surface2)', borderRadius: '10px', marginBottom: '16px' }}>
                 <div className="label-xs" style={{ marginBottom: '10px' }}>¿Cómo exportar?</div>
-                {broker === 'IOL'
-                  ? <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En IOL: <strong style={{ color: 'var(--text)' }}>Mis inversiones → Movimientos → Exportar XLS</strong>. El archivo incluye todas las operaciones del período seleccionado.</div>
-                  : <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En Balanz: <strong style={{ color: 'var(--text)' }}>Mi cuenta → Movimientos → Descargar Excel</strong>. Seleccioná el rango de fechas y descargá el .xlsx.</div>
-                }
+                {broker === 'IOL' ? <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En IOL: <strong style={{ color: 'var(--text)' }}>Mis inversiones → Movimientos → Exportar XLS</strong>.</div> : <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En Balanz: <strong style={{ color: 'var(--text)' }}>Mi cuenta → Movimientos → Descargar Excel</strong>.</div>}
               </div>
             )}
-
             {loading && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Procesando archivo...</div>}
-
-            {error && (
-              <div style={{ padding: '12px 16px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)', borderRadius: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '16px' }}>
-                <AlertCircle size={16} color="var(--red)" style={{ flexShrink: 0, marginTop: '1px' }} />
-                <div style={{ fontSize: '13px', color: 'var(--red)', fontFamily: 'DM Mono, monospace' }}>{error}</div>
-              </div>
-            )}
-
+            {error && (<div style={{ padding: '12px 16px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)', borderRadius: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '16px' }}><AlertCircle size={16} color="var(--red)" style={{ flexShrink: 0, marginTop: '1px' }} /><div style={{ fontSize: '13px', color: 'var(--red)', fontFamily: 'DM Mono, monospace' }}>{error}</div></div>)}
             {ops.length > 0 && (
               <>
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                  <div style={{ padding: '8px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <CheckCircle2 size={14} color="var(--green)" />
-                    <span style={{ fontSize: '13px', color: 'var(--green)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{newCount} nuevas</span>
-                  </div>
-                  {dupCount > 0 && (
-                    <div style={{ padding: '8px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <AlertCircle size={14} color="var(--amber)" />
-                      <span style={{ fontSize: '13px', color: 'var(--amber)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{dupCount} posibles duplicados</span>
-                    </div>
-                  )}
-                  <div style={{ padding: '8px 14px', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '13px', color: 'var(--violet-light)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{selectedOps.length} seleccionadas</span>
-                  </div>
+                  <div style={{ padding: '8px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}><CheckCircle2 size={14} color="var(--green)" /><span style={{ fontSize: '13px', color: 'var(--green)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{newCount} nuevas</span></div>
+                  {dupCount > 0 && (<div style={{ padding: '8px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertCircle size={14} color="var(--amber)" /><span style={{ fontSize: '13px', color: 'var(--amber)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{dupCount} posibles duplicados</span></div>)}
+                  <div style={{ padding: '8px 14px', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px' }}><span style={{ fontSize: '13px', color: 'var(--violet-light)', fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{selectedOps.length} seleccionadas</span></div>
                 </div>
-
                 <div style={{ borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border)', marginBottom: '16px' }}>
                   <div style={{ padding: '10px 16px', background: 'var(--surface2)', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--border)' }}>
                     <input type="checkbox" checked={selectedOps.length === newCount && newCount > 0} onChange={e => toggleAll(e.target.checked)} style={{ width: '15px', height: '15px', cursor: 'pointer', accentColor: 'var(--violet)' }} />
-                    <span style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Seleccionar todas las nuevas</span>
+                    <span style={{ fontSize: '12px', color: 'var(--muted2)' }}>Seleccionar todas las nuevas</span>
                   </div>
                   <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
                       <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
                         <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                          {['','Fecha','Tipo','Ticker','Cantidad','Precio','Monto USD','Moneda','Estado'].map(h => (
-                            <th key={h} style={{ padding: '8px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === '' ? 'center' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
-                          ))}
+                          {['','Fecha','Tipo','Ticker','Cantidad','Precio','Monto USD','Moneda','Estado'].map(h => (<th key={h} style={{ padding: '8px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === '' ? 'center' : 'left', whiteSpace: 'nowrap' }}>{h}</th>))}
                         </tr>
                       </thead>
                       <tbody>
                         {ops.map(op => (
                           <tr key={op.importId} onClick={() => toggleOne(op.importId)} style={{ borderBottom: '1px solid var(--border)', background: op.isDuplicate ? 'rgba(245,158,11,0.03)' : op.selected ? 'rgba(124,58,237,0.04)' : 'transparent', cursor: op.isDuplicate ? 'default' : 'pointer', opacity: op.isDuplicate ? 0.6 : 1 }}>
-                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                              <input type="checkbox" checked={op.selected} disabled={op.isDuplicate} onChange={() => toggleOne(op.importId)} style={{ width: '14px', height: '14px', cursor: op.isDuplicate ? 'default' : 'pointer', accentColor: 'var(--violet)' }} onClick={e => e.stopPropagation()} />
-                            </td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}><input type="checkbox" checked={op.selected} disabled={op.isDuplicate} onChange={() => toggleOne(op.importId)} style={{ width: '14px', height: '14px', cursor: op.isDuplicate ? 'default' : 'pointer', accentColor: 'var(--violet)' }} onClick={e => e.stopPropagation()} /></td>
                             <td style={{ padding: '8px 12px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{new Date(op.fecha + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: '2-digit' })}</td>
                             <td style={{ padding: '8px 12px' }}><span style={{ color: TIPO_COLORS_OP[op.tipo] || 'var(--text)', fontWeight: 600, textTransform: 'capitalize' }}>{op.tipo}</span></td>
                             <td style={{ padding: '8px 12px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)' }}>{op.ticker}</td>
@@ -1103,28 +962,17 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
                             <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{op.precio_unitario != null ? (op.moneda === 'ARS' ? fmtARS(op.precio_unitario) : fmtUSD(op.precio_unitario)) : '—'}</td>
                             <td style={{ padding: '8px 12px', color: 'var(--text)', fontWeight: 600 }}>{fmtUSD(op.monto_usd)}</td>
                             <td style={{ padding: '8px 12px', color: 'var(--muted2)' }}>{op.moneda}</td>
-                            <td style={{ padding: '8px 12px' }}>
-                              {op.isDuplicate
-                                ? <span style={{ fontSize: '10px', color: 'var(--amber)', background: 'rgba(245,158,11,0.12)', borderRadius: '4px', padding: '2px 6px' }}>duplicado</span>
-                                : <span style={{ fontSize: '10px', color: 'var(--green)', background: 'rgba(34,197,94,0.12)', borderRadius: '4px', padding: '2px 6px' }}>nueva</span>
-                              }
-                            </td>
+                            <td style={{ padding: '8px 12px' }}>{op.isDuplicate ? <span style={{ fontSize: '10px', color: 'var(--amber)', background: 'rgba(245,158,11,0.12)', borderRadius: '4px', padding: '2px 6px' }}>duplicado</span> : <span style={{ fontSize: '10px', color: 'var(--green)', background: 'rgba(34,197,94,0.12)', borderRadius: '4px', padding: '2px 6px' }}>nueva</span>}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 </div>
-
-                <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '16px' }}>
-                  * Las operaciones en ARS se convirtieron a USD usando el MEP actual (${mep.toLocaleString('es-AR')}). Podés editar los montos manualmente después de importar.
-                </div>
-
+                <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace', marginBottom: '16px' }}>* Las operaciones en ARS se convirtieron a USD usando el MEP actual (${mep.toLocaleString('es-AR')}).</div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   <button onClick={onClose} style={{ flex: 1, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '14px' }}>Cancelar</button>
-                  <button onClick={handleSave} disabled={saving || !selectedOps.length} className="btn-primary" style={{ flex: 2, padding: '10px', fontSize: '14px' }}>
-                    {saving ? 'Importando...' : `Importar ${selectedOps.length} operación${selectedOps.length !== 1 ? 'es' : ''}`}
-                  </button>
+                  <button onClick={handleSave} disabled={saving || !selectedOps.length} className="btn-primary" style={{ flex: 2, padding: '10px', fontSize: '14px' }}>{saving ? 'Importando...' : `Importar ${selectedOps.length} operación${selectedOps.length !== 1 ? 'es' : ''}`}</button>
                 </div>
               </>
             )}
@@ -1158,6 +1006,8 @@ type Tab = 'posiciones' | 'mapa' | 'distribucion' | 'performance' | 'historial' 
 export default function PortfolioPage() {
   const [operaciones, setOperaciones] = useState<Operacion[]>([]);
   const [posiciones, setPosiciones] = useState<PosicionCompleta[]>([]);
+  const [realizadas, setRealizadas] = useState<GananciaRealizada[]>([]);
+  const [vencimientosMap, setVencimientosMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [mep, setMep] = useState(1430);
@@ -1167,7 +1017,6 @@ export default function PortfolioPage() {
   const [efectivoUSD, setEfectivoUSD] = useState(0);
   const [totalInvertidoUSD, setTotalInvertidoUSD] = useState(0);
   const [xirr, setXirr] = useState<number | null>(null);
-  const [vencimientosMap, setVencimientosMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetch('/api/dolar').then(r => r.json()).then((data: any[]) => {
@@ -1182,47 +1031,45 @@ export default function PortfolioPage() {
   }, []);
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
-  const posMap = calcularPosicionesBase(ops);
-  const totalInv = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
-  const efectivo = calcularEfectivoUSD(ops);
-  setTotalInvertidoUSD(totalInv);
-  setEfectivoUSD(efectivo);
+    const posMap = calcularPosicionesBase(ops);
+    const totalInv = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + o.monto_usd, 0);
+    const efectivo = calcularEfectivoUSD(ops);
+    setTotalInvertidoUSD(totalInv);
+    setEfectivoUSD(efectivo);
 
-  const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({
-    ...pos, costoPromedioUSD: pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0,
-    precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null, loadingPrecio: true,
-  }));
-  setPosiciones([...posArray]);
+    const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({
+      ...pos, costoPromedioUSD: pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0,
+      precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null, loadingPrecio: true,
+    }));
+    setPosiciones([...posArray]);
 
-  const vMap: Record<string, string> = {};
-  const hoy = new Date();
+    const vMap: Record<string, string> = {};
+    const hoy = new Date();
 
-  const results = await Promise.all(posArray.map(async (pos, idx) => {
-    const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.ticker, mepRate);
-    if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
-    const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
-    const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
-    const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
-    const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
-    return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion, esVencido };
-  }));
+    const results = await Promise.all(posArray.map(async (pos, idx) => {
+      const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.ticker, mepRate);
+      if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
+      const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
+      const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
+      const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
+      const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
+      return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion, esVencido };
+    }));
 
-  setVencimientosMap(vMap);
+    setVencimientosMap(vMap);
 
-  const completed = posArray.map((pos, idx) => {
-    const r = results.find(x => x.idx === idx);
-    if (!r) return { ...pos, loadingPrecio: false };
-    return { ...pos, ...r, loadingPrecio: false };
-  });
+    const completed = posArray.map((pos, idx) => {
+      const r = results.find(x => x.idx === idx);
+      if (!r) return { ...pos, loadingPrecio: false };
+      return { ...pos, ...r, loadingPrecio: false };
+    });
 
-  // Solo mostrar en tenencias los activos NO vencidos
-  const activas = completed.filter(p => !p.esVencido);
-  setPosiciones(activas);
-
-  const totalActivos = activas.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
-  setXirr(calcularCAGR(ops, totalActivos));
-  setRealizadas(calcularGananciasRealizadas(ops, vMap));
-}, []);
+    const activas = completed.filter(p => !p.esVencido);
+    setPosiciones(activas);
+    const totalActivos = activas.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
+    setXirr(calcularCAGR(ops, totalActivos));
+    setRealizadas(calcularGananciasRealizadas(ops, vMap));
+  }, []);
 
   const loadData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true);
@@ -1237,8 +1084,7 @@ export default function PortfolioPage() {
   const handleImport = async (ops: Omit<Operacion, 'id'>[]) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Sesión expirada');
-    const rows = ops.map(op => ({ ...op, user_id: user.id }));
-    const { error } = await supabase.from('operaciones').insert(rows);
+    const { error } = await supabase.from('operaciones').insert(ops.map(op => ({ ...op, user_id: user.id })));
     if (error) throw new Error(error.message);
     setShowImport(false);
     await loadData(true);
@@ -1267,15 +1113,9 @@ export default function PortfolioPage() {
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Vista consolidada de posiciones, liquidez y rendimiento.</div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => setShowImport(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>
-            <Upload size={14} /> Importar
-          </button>
-          <button onClick={() => loadData(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}>
-            <RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} /> Actualizar
-          </button>
-          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Plus size={16} /> Agregar operación
-          </button>
+          <button onClick={() => setShowImport(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}><Upload size={14} /> Importar</button>
+          <button onClick={() => loadData(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px' }}><RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} /> Actualizar</button>
+          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Plus size={16} /> Agregar operación</button>
         </div>
       </div>
 
@@ -1313,7 +1153,7 @@ export default function PortfolioPage() {
           {tab === 'posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab === 'mapa'         && <TabMapa posiciones={posiciones} />}
           {tab === 'distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
-          {tab === 'performance' && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
+          {tab === 'performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
           {tab === 'historial'    && <TabHistorial operaciones={operaciones} mep={mep} valorActualIol={valorTotalUSD} />}
           {tab === 'operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async (id) => { await supabase.from('operaciones').delete().eq('id', id); await loadData(true); }} onImport={() => setShowImport(true)} />}
         </>
@@ -1325,18 +1165,12 @@ export default function PortfolioPage() {
           if (!user) { alert('Sesión expirada.'); return; }
           const { error } = await supabase.from('operaciones').insert({ ...op, user_id: user.id });
           if (error) { alert('Error: ' + error.message); return; }
-          setShowModal(false);
-          await loadData(true);
+          setShowModal(false); await loadData(true);
         }} />
       )}
 
       {showImport && (
-        <ModalImportarBroker
-          operacionesExistentes={operaciones}
-          mep={mep}
-          onClose={() => setShowImport(false)}
-          onImport={handleImport}
-        />
+        <ModalImportarBroker operacionesExistentes={operaciones} mep={mep} onClose={() => setShowImport(false)} onImport={handleImport} />
       )}
     </div>
   );
