@@ -94,9 +94,7 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
       map.set(tickerKey, { ticker: tickerKey, tickerBuscar: tickerOriginal, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'otro', broker: op.broker || '—', moneda: op.moneda || 'USD', cantidad: 0, costoTotalUSD: 0 });
     } else {
       const pos = map.get(tickerKey)!;
-      if (tickerOriginal.endsWith('D') && !NO_NORMALIZAR_D.has(tickerOriginal)) {
-        pos.tickerBuscar = tickerOriginal;
-      }
+      if (tickerOriginal.endsWith('D') && !NO_NORMALIZAR_D.has(tickerOriginal)) pos.tickerBuscar = tickerOriginal;
     }
     const pos = map.get(tickerKey)!;
     if (op.tipo === 'compra') { pos.cantidad += (op.cantidad || 0); pos.costoTotalUSD += op.monto_usd; }
@@ -169,7 +167,7 @@ async function fetchPrecio(ticker: string, mep: number): Promise<{ precioUSD: nu
   } catch { return { precioUSD: null, precioOriginal: null, moneda: 'USD', variacion: null, vencimiento: null }; }
 }
 
-// ─── Parsers de importación ───────────────────────────────────────────────────
+// ─── Parsers importación ──────────────────────────────────────────────────────
 
 function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): string {
   if (tipoInstrumento) {
@@ -389,19 +387,14 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 
 function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number }) {
   const [verUSD, setVerUSD] = useState(false);
-
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
   const totalCostoUSD = posiciones.reduce((s, p) => s + p.costoTotalUSD, 0);
   const totalPnlUSD = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const totalPnlPct = totalCostoUSD > 0 ? (totalPnlUSD / totalCostoUSD) * 100 : 0;
 
-  // Conversión según moneda seleccionada
   const conv = (usd: number | null) => usd == null ? null : verUSD ? usd : usd * mep;
-  const fmtVal = (usd: number | null) => {
-    const v = conv(usd);
-    return v == null ? '—' : verUSD ? fmtUSD(v) : fmtARS(v);
-  };
+  const fmtVal = (usd: number | null) => { const v = conv(usd); return v == null ? '—' : verUSD ? fmtUSD(v) : fmtARS(v); };
   const fmtValSign = (usd: number | null) => {
     const v = conv(usd);
     if (v == null) return '—';
@@ -414,11 +407,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
     return p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtARS(p.precioActual * mep);
   };
   const fmtCostoCol = (p: PosicionCompleta) => verUSD ? fmtUSD(p.costoPromedioUSD) : fmtARS(p.costoPromedioUSD * mep);
-
   const monedaLabel = verUSD ? 'USD' : 'ARS';
-  const fmtLiquidez = verUSD ? fmtUSD(efectivoUSD) : fmtARS(efectivoUSD * mep);
-  const fmtTotal = verUSD ? fmtUSD(valorTotalUSD) : fmtARS(valorTotalUSD * mep);
-  const fmtTotalPnl = verUSD ? fmtUSD(totalPnlUSD) : fmtARS(totalPnlUSD * mep);
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -446,28 +435,15 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
                   {p.nombre !== p.ticker && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  {p.loadingPrecio
-                    ? <span style={{ color: 'var(--muted)' }}>...</span>
-                    : <div style={{ color: 'var(--text)' }}>{fmtPrecioCol(p)}</div>
-                  }
+                  {p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div style={{ color: 'var(--text)' }}>{fmtPrecioCol(p)}</div>}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtCostoCol(p)}</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text)', fontWeight: 500 }}>
-                  {p.loadingPrecio ? '...' : fmtVal(p.valorActualUSD)}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500 }}>
-                  {p.loadingPrecio ? '...' : p.pnlUSD != null ? fmtValSign(p.pnlUSD) : '—'}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>
-                  {p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>
-                  {p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                  <span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span>
-                </td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text)', fontWeight: 500 }}>{p.loadingPrecio ? '...' : fmtVal(p.valorActualUSD)}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500 }}>{p.loadingPrecio ? '...' : p.pnlUSD != null ? fmtValSign(p.pnlUSD) : '—'}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right' }}><span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span></td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted2)', fontSize: '12px' }}>{p.broker}</td>
               </tr>
             ))}
@@ -475,7 +451,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
                 <td style={{ padding: '12px 16px' }}><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: '#06b6d4' }}>Liquidez</div></td>
                 <td colSpan={3} />
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: '#06b6d4', fontWeight: 500 }}>{fmtLiquidez}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: '#06b6d4', fontWeight: 500 }}>{verUSD ? fmtUSD(efectivoUSD) : fmtARS(efectivoUSD * mep)}</td>
                 <td colSpan={3} style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
                 <td />
@@ -486,8 +462,8 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
             <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
               <td style={{ padding: '12px 16px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '14px' }}>Total</td>
               <td colSpan={3} />
-              <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)', fontSize: '14px' }}>{fmtTotal}</td>
-              <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD), fontSize: '14px' }}>{fmtTotalPnl}</td>
+              <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)', fontSize: '14px' }}>{verUSD ? fmtUSD(valorTotalUSD) : fmtARS(valorTotalUSD * mep)}</td>
+              <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD), fontSize: '14px' }}>{verUSD ? (totalPnlUSD >= 0 ? '+' : '') + fmtUSD(totalPnlUSD) : (totalPnlUSD >= 0 ? '+' : '') + fmtARS(totalPnlUSD * mep)}</td>
               <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlPct), fontSize: '14px' }}>{fmtPct(totalPnlPct)}</td>
               <td colSpan={3} />
             </tr>
@@ -560,7 +536,6 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
   const totalRealizada = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
   const totalNoRealizada = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const sortedPos = [...posiciones].filter(p => p.pnlPct != null).sort((a, b) => b.pnlPct! - a.pnlPct!);
-
   const top = sortedPos.filter(p => p.pnlPct != null && p.pnlPct > 0).slice(0, 5);
   const topTickers = new Set(top.map(p => p.ticker));
   const bot = sortedPos.filter(p => p.pnlPct != null && p.pnlPct < 0 && !topTickers.has(p.ticker)).slice(-5).reverse();
@@ -592,40 +567,32 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
         <div className="card" style={{ borderColor: totalNoRealizada >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
           <div className="label-xs" style={{ marginBottom: '8px' }}>📊 NO REALIZADA</div>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalNoRealizada) }}>{totalNoRealizada >= 0 ? '+' : ''}{fmtUSD(totalNoRealizada)}</div>
-          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones abiertas</div>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Posiciones abiertas</div>
         </div>
         <div className="card" style={{ borderColor: totalRealizada >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' }}>
           <div className="label-xs" style={{ marginBottom: '8px' }}>✅ REALIZADA</div>
           <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 700, color: colorV(totalRealizada) }}>{totalRealizada >= 0 ? '+' : ''}{fmtUSD(totalRealizada)}</div>
-          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Ganancia/pérdida en posiciones cerradas</div>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>Posiciones cerradas</div>
         </div>
       </div>
-
       {(top.length > 0 || bot.length > 0) && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div className="card">
             <div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejor abierta</div>
-            {top.length > 0 ? top.map((p, i) => renderPosItem(p, i, true)) : <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin ganancias abiertas</div>}
+            {top.length > 0 ? top.map((p, i) => renderPosItem(p, i, true)) : <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin ganancias abiertas</div>}
           </div>
           <div className="card">
             <div className="label-xs" style={{ marginBottom: '12px' }}>📉 Peor abierta</div>
-            {bot.length > 0 ? bot.map((p, i) => renderPosItem(p, i, false)) : <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin pérdidas abiertas</div>}
+            {bot.length > 0 ? bot.map((p, i) => renderPosItem(p, i, false)) : <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin pérdidas abiertas</div>}
           </div>
         </div>
       )}
-
       {realizadas.length > 0 && (
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>✅ Posiciones cerradas / realizadas</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div>
-              {realizadas.filter(r => r.gananciaUSD >= 0).map((r, i) => renderRealItem(r, i))}
-              {realizadas.filter(r => r.gananciaUSD >= 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin ganancias realizadas</div>}
-            </div>
-            <div>
-              {realizadas.filter(r => r.gananciaUSD < 0).map((r, i) => renderRealItem(r, i))}
-              {realizadas.filter(r => r.gananciaUSD < 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px', fontFamily: 'DM Mono, monospace' }}>Sin pérdidas realizadas</div>}
-            </div>
+            <div>{realizadas.filter(r => r.gananciaUSD >= 0).map((r, i) => renderRealItem(r, i))}{realizadas.filter(r => r.gananciaUSD >= 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin ganancias realizadas</div>}</div>
+            <div>{realizadas.filter(r => r.gananciaUSD < 0).map((r, i) => renderRealItem(r, i))}{realizadas.filter(r => r.gananciaUSD < 0).length === 0 && <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin pérdidas realizadas</div>}</div>
           </div>
         </div>
       )}
@@ -703,7 +670,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
     build();
   }, [operaciones, mep, valorActualIol]);
 
-  if (loading) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div><div style={{ fontSize: '11px', color: 'var(--muted2)', marginTop: '8px', fontFamily: 'DM Mono, monospace' }}>Puede tardar unos segundos</div></div>;
+  if (loading) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div></div>;
   if (error || datos.length <= 1) return <div className="card" style={{ textAlign: 'center', padding: '60px' }}><div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{error || 'No hay datos históricos suficientes.'}</div></div>;
 
   const display = datos.filter((_, i) => i % Math.max(1, Math.floor(datos.length / 80)) === 0 || i === datos.length - 1);
@@ -768,11 +735,10 @@ function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Oper
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <div className="label-xs">📝 Historial de operaciones</div>
-          <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>{operaciones.length} operaciones registradas</div>
-        </div>
-        <button onClick={onImport} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+        <div><div className="label-xs">📝 Historial de operaciones</div><div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>{operaciones.length} operaciones registradas</div></div>
+        <button onClick={onImport} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
           <Upload size={14} /> Importar CSV
         </button>
       </div>
@@ -846,7 +812,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
     await onSave({ fecha, ticker: isAssetOp || tipo === 'dividendo' ? ticker.toUpperCase().trim() : 'EFECTIVO', nombre: isAssetOp ? ticker.toUpperCase().trim() : tipo === 'dividendo' ? ticker.toUpperCase().trim() : (tipo === 'deposito' ? 'Depósito' : 'Retiro'), tipo, cantidad: isAssetOp ? parseFloat(cantidad) || null : null, precio_unitario: isAssetOp ? parseFloat(precioUnitario) || null : null, monto_usd, moneda, tipo_activo: isAssetOp ? tipoActivo : 'efectivo', broker: broker || null, notas: notas || null });
     setSaving(false);
   };
-  const ls = { display: 'block' as const, marginBottom: '6px' };
+  const ls = { display: 'block' as const };
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
       <div className="card" style={{ width: '100%', maxWidth: '520px', maxHeight: '92vh', overflowY: 'auto' }}>
@@ -855,7 +821,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
         </div>
         <div style={{ marginBottom: '16px' }}>
-          <div className="label-xs" style={ls}>Tipo de operación</div>
+          <div className="label-xs" style={{ ...ls, marginBottom: '8px' }}>Tipo de operación</div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {[{ key: 'compra', label: '🛒 Compra' },{ key: 'venta', label: '💸 Venta' },{ key: 'dividendo', label: '🎁 Dividendo' },{ key: 'deposito', label: '💵 Depósito' },{ key: 'retiro', label: '🏦 Retiro' }].map(t => (
               <button key={t.key} onClick={() => setTipo(t.key as any)} style={{ background: tipo === t.key ? 'var(--violet)' : 'var(--surface2)', color: tipo === t.key ? '#fff' : 'var(--text2)', border: `1px solid ${tipo === t.key ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>{t.label}</button>
@@ -863,21 +829,21 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Fecha</div><input className="input-field" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
-          {(isAssetOp || tipo === 'dividendo') && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Ticker</div><input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /></div>)}
+          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Fecha</div><input className="input-field" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
+          {(isAssetOp || tipo === 'dividendo') && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Ticker</div><input className="input-field" placeholder="AAPL, GD35, GGAL, NVDAD..." value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /></div>)}
           {isAssetOp && (<>
-            <div><div className="label-xs" style={ls}>Cantidad</div><input className="input-field" type="number" placeholder="0" value={cantidad} onChange={e => setCantidad(e.target.value)} min="0" step="any" /></div>
-            <div><div className="label-xs" style={ls}>Precio unitario</div><input className="input-field" type="number" placeholder="0.00" value={precioUnitario} onChange={e => setPrecioUnitario(e.target.value)} min="0" step="any" /></div>
-            <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Tipo de activo</div>
+            <div><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Cantidad</div><input className="input-field" type="number" placeholder="0" value={cantidad} onChange={e => setCantidad(e.target.value)} min="0" step="any" /></div>
+            <div><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Precio unitario</div><input className="input-field" type="number" placeholder="0.00" value={precioUnitario} onChange={e => setPrecioUnitario(e.target.value)} min="0" step="any" /></div>
+            <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Tipo de activo</div>
               <select className="input-field" value={tipoActivo} onChange={e => setTipoActivo(e.target.value)} style={{ cursor: 'pointer' }}>
                 <option value="cedear">CEDEAR</option><option value="accion_ar">Acción Argentina</option><option value="bono">Bono Soberano</option><option value="on">Obligación Negociable</option><option value="etf">ETF</option><option value="crypto">Crypto</option><option value="otro">Otro</option>
               </select>
             </div>
           </>)}
-          {isCashOp && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Monto</div><input className="input-field" type="number" placeholder="0.00" value={montoDirecto} onChange={e => setMontoDirecto(e.target.value)} min="0" step="any" /></div>)}
-          <div><div className="label-xs" style={ls}>Moneda</div><div style={{ display: 'flex', gap: '6px' }}>{['USD','ARS'].map(m => (<button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>))}</div></div>
-          <div><div className="label-xs" style={ls}>Broker</div><input className="input-field" placeholder="IOL, Balanz, Cocos..." value={broker} onChange={e => setBroker(e.target.value)} /></div>
-          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={ls}>Notas (opcional)</div><input className="input-field" placeholder="Observaciones..." value={notas} onChange={e => setNotas(e.target.value)} /></div>
+          {isCashOp && (<div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Monto</div><input className="input-field" type="number" placeholder="0.00" value={montoDirecto} onChange={e => setMontoDirecto(e.target.value)} min="0" step="any" /></div>)}
+          <div><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Moneda</div><div style={{ display: 'flex', gap: '6px' }}>{['USD','ARS'].map(m => (<button key={m} onClick={() => setMoneda(m as any)} style={{ flex: 1, background: moneda === m ? 'var(--violet)' : 'var(--surface2)', color: moneda === m ? '#fff' : 'var(--text2)', border: `1px solid ${moneda === m ? 'var(--violet)' : 'var(--border)'}`, borderRadius: '8px', padding: '8px', cursor: 'pointer', fontSize: '13px', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>{m}</button>))}</div></div>
+          <div><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Broker</div><input className="input-field" placeholder="IOL, Balanz, Cocos..." value={broker} onChange={e => setBroker(e.target.value)} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><div className="label-xs" style={{ ...ls, marginBottom: '6px' }}>Notas (opcional)</div><input className="input-field" placeholder="Observaciones..." value={notas} onChange={e => setNotas(e.target.value)} /></div>
         </div>
         {montoUSDPreview > 0 && (<div style={{ marginTop: '14px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '13px', color: 'var(--text2)' }}>Equivalente en USD</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '15px', fontWeight: 600, color: 'var(--violet-light)' }}>{fmtUSD(montoUSDPreview)}</span></div>)}
         {moneda === 'ARS' && <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Conversión usando MEP actual: ${mep.toLocaleString('es-AR')}</div>}
@@ -909,9 +875,9 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
       let parsed: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
       if (broker === 'IOL') { const text = await file.text(); parsed = parseIOL(text, mep); }
       else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep); }
-      if (!parsed.length) { setError('No se encontraron operaciones de compra, venta o dividendo en el archivo.'); setLoading(false); return; }
+      if (!parsed.length) { setError('No se encontraron operaciones en el archivo.'); setLoading(false); return; }
       setOps(parsed.map(op => ({ ...op, isDuplicate: isDuplicateOp(op, operacionesExistentes), selected: !isDuplicateOp(op, operacionesExistentes) })));
-    } catch (e: any) { setError(e?.message || `Error al leer el archivo. Verificá que sea el formato correcto de ${broker}.`); }
+    } catch (e: any) { setError(e?.message || `Error al leer el archivo.`); }
     setLoading(false);
   }, [broker, mep, operacionesExistentes]);
 
@@ -933,7 +899,7 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
       <div className="card" style={{ width: '100%', maxWidth: '820px', maxHeight: '92vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <div><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Importar desde broker</div><div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>Compras, ventas y dividendos. Las cauciones se ignoran automáticamente.</div></div>
+          <div><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Importar desde broker</div><div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>Compras, ventas y dividendos.</div></div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={20} /></button>
         </div>
         {saved ? (
@@ -953,19 +919,15 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
                 </div>
               </div>
               <div>
-                <div className="label-xs" style={{ marginBottom: '8px' }}>Archivo {broker === 'IOL' ? '(.xls exportado de IOL)' : '(.xlsx exportado de Balanz)'}</div>
-                <button onClick={() => fileRef.current?.click()} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
+                <div className="label-xs" style={{ marginBottom: '8px' }}>Archivo {broker === 'IOL' ? '(.xls de IOL)' : '(.xlsx de Balanz)'}</div>
+                <button onClick={() => fileRef.current?.click()} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px' }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--violet)'; e.currentTarget.style.color = 'var(--violet-light)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)'; }}>
                   <Upload size={15} /> Seleccionar archivo
                 </button>
                 <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
               </div>
             </div>
-            {!ops.length && !loading && !error && (
-              <div style={{ padding: '20px', background: 'var(--surface2)', borderRadius: '10px', marginBottom: '16px' }}>
-                <div className="label-xs" style={{ marginBottom: '10px' }}>¿Cómo exportar?</div>
-                {broker === 'IOL' ? <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En IOL: <strong style={{ color: 'var(--text)' }}>Mis inversiones → Movimientos → Exportar XLS</strong>.</div> : <div style={{ fontSize: '12px', color: 'var(--muted2)', lineHeight: 1.7 }}>En Balanz: <strong style={{ color: 'var(--text)' }}>Mi cuenta → Movimientos → Descargar Excel</strong>.</div>}
-              </div>
-            )}
             {loading && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Procesando archivo...</div>}
             {error && (<div style={{ padding: '12px 16px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)', borderRadius: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '16px' }}><AlertCircle size={16} color="var(--red)" style={{ flexShrink: 0, marginTop: '1px' }} /><div style={{ fontSize: '13px', color: 'var(--red)', fontFamily: 'DM Mono, monospace' }}>{error}</div></div>)}
             {ops.length > 0 && (
@@ -1054,6 +1016,10 @@ export default function PortfolioPage() {
   const [totalInvertidoUSD, setTotalInvertidoUSD] = useState(0);
   const [xirr, setXirr] = useState<number | null>(null);
 
+  // ─── CAUCIONES NET ───
+  const [netoCaucionesUSD, setNetoCaucionesUSD] = useState<number | null>(null);
+  const [netoCaucionesARS, setNetoCaucionesARS] = useState<number | null>(null);
+
   useEffect(() => {
     fetch('/api/dolar').then(r => r.json()).then((data: any[]) => {
       if (Array.isArray(data)) { const bolsa = data.find(d => d.casa === 'bolsa'); if (bolsa?.venta) setMep(bolsa.venta); }
@@ -1064,6 +1030,28 @@ export default function PortfolioPage() {
     const { data, error } = await supabase.from('operaciones').select('*').order('fecha', { ascending: true });
     if (error) { console.error(error); return []; }
     return data as Operacion[];
+  }, []);
+
+  const loadNetoCauciones = useCallback(async () => {
+    try {
+      const [caucRes, perRes, actRes] = await Promise.all([
+        supabase.from('cauciones').select('id, monto, tna, plazo, moneda'),
+        supabase.from('caucion_periodos').select('caucion_id, intereses'),
+        supabase.from('cedears_arb').select('precio_compra, precio_actual, precio_venta, cantidad, moneda'),
+      ]);
+      if (!caucRes.data || !perRes.data || !actRes.data) return;
+      const costosPorCaucion: Record<string, number> = {};
+      perRes.data.forEach(p => { costosPorCaucion[p.caucion_id] = (costosPorCaucion[p.caucion_id] || 0) + p.intereses; });
+      const calcNeto = (moneda: string) => {
+        const caucs = caucRes.data!.filter((c: any) => (c.moneda || 'USD') === moneda);
+        const acts = actRes.data!.filter((a: any) => (a.moneda || 'USD') === moneda);
+        const costo = caucs.reduce((t: number, c: any) => t + (costosPorCaucion[c.id] || 0) + c.monto * (c.tna / 100) * (c.plazo / 365), 0);
+        const pnl = acts.reduce((t: number, a: any) => t + ((a.precio_venta ?? a.precio_actual) - a.precio_compra) * a.cantidad, 0);
+        return pnl - costo;
+      };
+      setNetoCaucionesUSD(calcNeto('USD'));
+      setNetoCaucionesARS(calcNeto('ARS'));
+    } catch {}
   }, []);
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
@@ -1112,8 +1100,9 @@ export default function PortfolioPage() {
     const ops = await loadOperaciones();
     setOperaciones(ops);
     if (ops.length > 0) await buildPositions(ops, mep);
+    await loadNetoCauciones();
     if (refresh) setRefreshing(false); else setLoading(false);
-  }, [mep, loadOperaciones, buildPositions]);
+  }, [mep, loadOperaciones, buildPositions, loadNetoCauciones]);
 
   useEffect(() => { loadData(); }, [mep]);
 
@@ -1126,8 +1115,10 @@ export default function PortfolioPage() {
     await loadData(true);
   };
 
+  // ─── Cálculos del dashboard ───
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
-  const valorTotalUSD = totalActivosUSD + efectivoUSD;
+  const netoCaucionesTotalUSD = (netoCaucionesUSD ?? 0) + ((netoCaucionesARS ?? 0) / mep);
+  const valorTotalUSD = totalActivosUSD + efectivoUSD + netoCaucionesTotalUSD;
   const gananciaNeta = valorTotalUSD - totalInvertidoUSD;
   const gananciaNetaPct = totalInvertidoUSD > 0 ? (gananciaNeta / totalInvertidoUSD) * 100 : 0;
   const variacionHoy = posiciones.reduce((s, p) => { if (p.variacionDiaria != null && p.valorActualUSD != null) return s + p.valorActualUSD - (p.valorActualUSD / (1 + p.variacionDiaria / 100)); return s; }, 0);
@@ -1159,18 +1150,48 @@ export default function PortfolioPage() {
         <EmptyState onAdd={() => setShowModal(true)} onImport={() => setShowImport(true)} />
       ) : (
         <>
+          {/* Métricas principales */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '12px' }}>
             <MetricaCard label="CAPITAL ACTUAL" value={fmtUSD(valorTotalUSD)} sub={`Hoy ${variacionHoy >= 0 ? '+' : ''}${fmtUSD(variacionHoy)} (${fmtPct(variacionHoyPct)})`} subColor={colorV(variacionHoyPct)} accent />
             <MetricaCard label="TOTAL INVERTIDO" value={fmtUSD(totalInvertidoUSD)} sub="Suma de compras realizadas" />
             <MetricaCard label="GANANCIA NETA" value={(gananciaNeta >= 0 ? '+' : '') + fmtUSD(gananciaNeta)} sub={`${fmtPct(gananciaNetaPct)} retorno total`} subColor={colorV(gananciaNeta)} valueColor={colorV(gananciaNeta)} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+
+          {/* Métricas secundarias */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '12px' }}>
             <MetricaCard label="TIR ANUALIZADA" small value={xirr != null ? (xirr >= 0 ? '+' : '') + xirr.toFixed(1) + '%' : '—'} sub="CAGR desde primera compra" valueColor={xirr != null ? colorV(xirr) : 'var(--text)'} />
             <MetricaCard label="TOTAL EN ACTIVOS" small value={fmtUSD(totalActivosUSD)} sub={`${posiciones.length} posición${posiciones.length !== 1 ? 'es' : ''}`} />
             <MetricaCard label="TOTAL EN LIQUIDEZ" small value={fmtUSD(efectivoUSD)} sub="Efectivo disponible" valueColor="#06b6d4" />
             <MetricaCard label="CONCENTRACIÓN" small value={`${concentracion.toFixed(0)}%`} sub={`top 3: ${sortedByVal.slice(0, 3).map(p => p.ticker).join(', ')}`} valueColor={concentracion > 70 ? 'var(--red)' : concentracion > 50 ? 'var(--amber)' : 'var(--green)'} />
           </div>
 
+          {/* Cards cauciones */}
+          {(netoCaucionesUSD !== null || netoCaucionesARS !== null) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+              {netoCaucionesUSD !== null && (
+                <div className="card" style={{ borderColor: netoCaucionesUSD >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)' }}>
+                  <div className="label-xs" style={{ marginBottom: '8px' }}>⚡ NETO CAUCIONES USD</div>
+                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 600, color: netoCaucionesUSD >= 0 ? 'var(--green)' : 'var(--red)', marginBottom: '4px' }}>
+                    {netoCaucionesUSD >= 0 ? '+' : ''}{fmtUSD(netoCaucionesUSD)}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>P&L activos USD − costo cauciones USD · incluido en capital total</div>
+                </div>
+              )}
+              {netoCaucionesARS !== null && (
+                <div className="card" style={{ borderColor: netoCaucionesARS >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)' }}>
+                  <div className="label-xs" style={{ marginBottom: '8px' }}>⚡ NETO CAUCIONES ARS</div>
+                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '22px', fontWeight: 600, color: netoCaucionesARS >= 0 ? 'var(--green)' : 'var(--red)', marginBottom: '4px' }}>
+                    {netoCaucionesARS >= 0 ? '+' : ''}{fmtARS(netoCaucionesARS)}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
+                    ≈ {fmtUSD(Math.abs(netoCaucionesARS) / mep)} USD · incluido en capital total
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mejor/peor activo */}
           {(mejorActivo || peorActivo) && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
               {mejorActivo && (<div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'rgba(34,197,94,0.2)' }}><TrendingUp size={20} color="var(--green)" /><div><div className="label-xs" style={{ marginBottom: '2px' }}>MEJOR ACTIVO</div><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: 'var(--green)', marginRight: '8px' }}>{mejorActivo.ticker}</span><span style={{ fontFamily: 'DM Mono, monospace', fontSize: '14px', color: 'var(--green)' }}>{fmtPct(mejorActivo.pnlPct)}</span></div></div>)}
@@ -1178,6 +1199,7 @@ export default function PortfolioPage() {
             </div>
           )}
 
+          {/* Tabs */}
           <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', overflowX: 'auto' }}>
             {[{ key: 'posiciones' as Tab, label: 'Posiciones', icon: '📋' },{ key: 'mapa' as Tab, label: 'Mapa', icon: '🗺️' },{ key: 'distribucion' as Tab, label: 'Distribución', icon: '🥧' },{ key: 'performance' as Tab, label: 'Performance', icon: '🏆' },{ key: 'historial' as Tab, label: 'Historial', icon: '📈' },{ key: 'operaciones' as Tab, label: 'Operaciones', icon: '📝' }].map(t => (
               <button key={t.key} onClick={() => setTab(t.key)} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab === t.key ? 'var(--violet)' : 'transparent', color: tab === t.key ? '#fff' : 'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
@@ -1208,6 +1230,8 @@ export default function PortfolioPage() {
       {showImport && (
         <ModalImportarBroker operacionesExistentes={operaciones} mep={mep} onClose={() => setShowImport(false)} onImport={handleImport} />
       )}
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
