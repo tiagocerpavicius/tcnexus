@@ -1077,7 +1077,7 @@ export default function PortfolioPage() {
       const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
       const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
       const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
-      return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacion, esVencido };
+      return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacionDiaria: variacion, esVencido };
     }));
 
     setVencimientosMap(vMap);
