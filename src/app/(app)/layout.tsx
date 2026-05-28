@@ -2,11 +2,14 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import Sidebar from '@/components/Sidebar';
+import BottomNav from '@/components/BottomNav';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, signOut } = useAuth();
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -29,26 +32,29 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!user) return null;
 
-  const sidebarWidth = collapsed ? 64 : 240;
-
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <Sidebar
-        userEmail={user.email || ''}
-        onSignOut={signOut}
-        collapsed={collapsed}
-        onToggle={() => setCollapsed(c => !c)}
-      />
+      {!isMobile && (
+        <Sidebar
+          userEmail={user.email || ''}
+          onSignOut={signOut}
+          collapsed={collapsed}
+          onToggle={() => setCollapsed(c => !c)}
+        />
+      )}
       <main style={{
-        marginLeft: sidebarWidth,
+        marginLeft: isMobile ? 0 : (collapsed ? 64 : 240),
         flex: 1,
         minHeight: '100vh',
         background: 'var(--bg)',
-        padding: '32px',
+        padding: isMobile ? '16px 14px 76px 14px' : '32px',
         transition: 'margin-left 0.2s ease',
+        maxWidth: '100vw',
+        overflowX: 'hidden',
       }}>
         {children}
       </main>
+      {isMobile && <BottomNav onSignOut={signOut} />}
     </div>
   );
 }
