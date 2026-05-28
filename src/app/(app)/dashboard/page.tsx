@@ -2,10 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, X, RefreshCw, Search, ChevronRight, Sparkles } from 'lucide-react';
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid,
-} from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
 type Tab = 'precios' | 'fundamentales' | 'correlacion' | 'graficos' | 'analistas' | 'ia';
@@ -25,7 +23,6 @@ interface TickerItem {
   loading: boolean; loadingFunds: boolean; loadingHistory: boolean;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 const fmtUSD = (n: number | null) => n == null ? '—' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtARS = (n: number | null) => n == null ? '—' : '$' + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPct = (n: number | null) => n == null ? '—' : (n > 0 ? '+' : '') + n.toFixed(2) + '%';
@@ -42,16 +39,15 @@ function volatilidad(h: Hist[]): number | null {
 }
 function varPeriodo(h: Hist[], dias: number): number | null {
   if (h.length < 2) return null;
-  const hoy = h[h.length - 1].cierre;
-  const corte = new Date();
-  corte.setDate(corte.getDate() - dias);
+  const hoy = h[h.length-1].cierre;
+  const corte = new Date(); corte.setDate(corte.getDate()-dias);
   const corteStr = corte.toISOString().split('T')[0];
   const pasado = [...h].reverse().find(d => d.fecha <= corteStr);
   if (!pasado) {
     if (dias >= 300) return +((hoy - h[0].cierre) / h[0].cierre * 100).toFixed(2);
     return null;
   }
-  return +((hoy - pasado.cierre) / pasado.cierre * 100).toFixed(2);
+  return +((hoy - pasado.cierre)/pasado.cierre*100).toFixed(2);
 }
 function pearson(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length); if (n < 5) return 0;
@@ -67,8 +63,8 @@ function corrColor(v: number) {
   if (v>=-0.5) return '#f87171'; return '#ef4444';
 }
 
-// ── Tab: Precios ─────────────────────────────────────────────────────────────
 function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: string) => void }) {
+  const isMobile = useIsMobile();
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
@@ -79,7 +75,7 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo','Precio','Var. Diaria','Var. Mensual','Var. Anual','Volatilidad',''].map(h => (
+              {['Activo','Precio','Var. Diaria', ...(isMobile ? [] : ['Var. Mensual','Var. Anual','Volatilidad']), ''].map(h => (
                 <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -92,10 +88,10 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                 <td style={{ padding: '12px 16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS[i%COLORS.length], flexShrink: 0 }} />
                     <div>
                       <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: 'var(--text)' }}>{t.ticker}</div>
-                      {t.nombre && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{t.nombre}</div>}
+                      {t.nombre && !isMobile && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{t.nombre}</div>}
                     </div>
                   </div>
                 </td>
@@ -103,15 +99,17 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
                   {t.loading ? <span style={{ color: 'var(--muted)' }}>...</span> : fmtP(t.precio, t.moneda)}
                 </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.variacion) }}>{t.loading ? '...' : fmtPct(t.variacion)}</td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varMensual) }}>
-                  {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varMensual)}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varAnual) }}>
-                  {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varAnual)}
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>
-                  {t.loadingHistory ? '...' : t.volatilidad != null ? `${t.volatilidad.toFixed(1)}%` : '—'}
-                </td>
+                {!isMobile && <>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varMensual) }}>
+                    {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varMensual)}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varAnual) }}>
+                    {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varAnual)}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>
+                    {t.loadingHistory ? '...' : t.volatilidad != null ? `${t.volatilidad.toFixed(1)}%` : '—'}
+                  </td>
+                </>}
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}><ChevronRight size={14} color="var(--muted)" /></td>
               </tr>
             ))}
@@ -122,23 +120,45 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
   );
 }
 
-// ── Tab: Fundamentales ───────────────────────────────────────────────────────
 function TabFundamentales({ items }: { items: TickerItem[] }) {
+  const isMobile = useIsMobile();
   const metrics = [
-    { key: 'marketCap', label: 'Market Cap',    fmt: fmtM,    hi: true  },
-    { key: 'per',       label: 'P/E Ratio',     fmt: fmtNum,  hi: false },
-    { key: 'eps',       label: 'EPS (USD)',      fmt: (v: any) => v != null ? '$'+Number(v).toFixed(2) : '—', hi: true },
-    { key: 'beta',      label: 'Beta',           fmt: fmtNum,  hi: null  },
-    { key: 'maximo52',  label: 'Máx. 52 sem.',  fmt: fmtUSD,  hi: true  },
-    { key: 'minimo52',  label: 'Mín. 52 sem.',  fmt: fmtUSD,  hi: false },
+    { key: 'marketCap', label: 'Market Cap',   fmt: fmtM,   hi: true  },
+    { key: 'per',       label: 'P/E Ratio',    fmt: fmtNum, hi: false },
+    { key: 'eps',       label: 'EPS (USD)',     fmt: (v: any) => v != null ? '$'+Number(v).toFixed(2) : '—', hi: true },
+    { key: 'beta',      label: 'Beta',          fmt: fmtNum, hi: null  },
+    { key: 'maximo52',  label: 'Máx. 52 sem.', fmt: fmtUSD, hi: true  },
+    { key: 'minimo52',  label: 'Mín. 52 sem.', fmt: fmtUSD, hi: false },
   ] as const;
 
   function best(key: string, hi: boolean | null): string | null {
     if (hi === null) return null;
     const vals = items.map(t => ({ ticker: t.ticker, val: (t as any)[key] as number | null })).filter(x => x.val != null);
     if (!vals.length) return null;
-    return hi ? vals.reduce((a,b) => a.val! > b.val! ? a : b).ticker
-              : vals.reduce((a,b) => a.val! < b.val! ? a : b).ticker;
+    return hi ? vals.reduce((a,b) => a.val! > b.val! ? a : b).ticker : vals.reduce((a,b) => a.val! < b.val! ? a : b).ticker;
+  }
+
+  // En mobile mostramos cards en lugar de tabla
+  if (isMobile) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {items.map((t, ti) => (
+          <div key={t.ticker} className="card">
+            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: COLORS[ti%COLORS.length], marginBottom: '12px' }}>{t.ticker}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              {metrics.map(m => (
+                <div key={m.key} style={{ background: 'var(--surface2)', borderRadius: '8px', padding: '10px' }}>
+                  <div className="label-xs" style={{ marginBottom: '4px' }}>{m.label}</div>
+                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>
+                    {t.loadingFunds ? '...' : (m.fmt as any)((t as any)[m.key])}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -152,9 +172,7 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
               <th style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'left' }}>Indicador</th>
-              {items.map((t, i) => (
-                <th key={t.ticker} style={{ padding: '10px 16px', color: COLORS[i % COLORS.length], fontWeight: 600, textAlign: 'right' }}>{t.ticker}</th>
-              ))}
+              {items.map((t, i) => (<th key={t.ticker} style={{ padding: '10px 16px', color: COLORS[i%COLORS.length], fontWeight: 600, textAlign: 'right' }}>{t.ticker}</th>))}
             </tr>
           </thead>
           <tbody>
@@ -164,10 +182,9 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
                 <tr key={m.key} style={{ borderBottom: '1px solid var(--border)', background: mi%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
                   <td style={{ padding: '12px 16px', color: 'var(--text2)', fontFamily: 'DM Sans, sans-serif' }}>{m.label}</td>
                   {items.map(t => {
-                    const val = (t as any)[m.key];
-                    const isBest = b === t.ticker;
+                    const val = (t as any)[m.key]; const isBest = b === t.ticker;
                     return (
-                      <td key={t.ticker} style={{ padding: '12px 16px', textAlign: 'right', color: isBest ? 'var(--green)' : val==null ? 'var(--muted)' : 'var(--text)', fontWeight: isBest ? 600 : 400 }}>
+                      <td key={t.ticker} style={{ padding: '12px 16px', textAlign: 'right', color: isBest?'var(--green)':val==null?'var(--muted)':'var(--text)', fontWeight: isBest?600:400 }}>
                         {t.loadingFunds ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : (m.fmt as any)(val)}
                       </td>
                     );
@@ -182,7 +199,6 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
   );
 }
 
-// ── Tab: Correlación ─────────────────────────────────────────────────────────
 function TabCorrelacion({ items }: { items: TickerItem[] }) {
   const withH = items.filter(t => t.historico && t.historico.length > 10);
   if (items.some(t => t.loadingHistory)) return <div style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace', padding: '40px', textAlign: 'center' }}>Calculando correlaciones...</div>;
@@ -193,7 +209,6 @@ function TabCorrelacion({ items }: { items: TickerItem[] }) {
   );
   const rets = withH.map(t => retornos(t.historico!));
   const matrix = withH.map((_, i) => withH.map((__, j) => pearson(rets[i], rets[j])));
-
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
@@ -214,9 +229,7 @@ function TabCorrelacion({ items }: { items: TickerItem[] }) {
                 <td style={{ padding: '8px 16px', color: COLORS[i%COLORS.length], fontWeight: 600 }}>{t.ticker}</td>
                 {matrix[i].map((val, j) => (
                   <td key={j} style={{ padding: '6px 8px', textAlign: 'center' }}>
-                    <div style={{ background: corrColor(val), borderRadius: '8px', padding: '8px 12px', fontWeight: val===1?700:500, color: '#000', fontSize: '13px' }}>
-                      {val.toFixed(2)}
-                    </div>
+                    <div style={{ background: corrColor(val), borderRadius: '8px', padding: '8px 12px', fontWeight: val===1?700:500, color: '#000', fontSize: '13px' }}>{val.toFixed(2)}</div>
                   </td>
                 ))}
               </tr>
@@ -224,7 +237,7 @@ function TabCorrelacion({ items }: { items: TickerItem[] }) {
           </tbody>
         </table>
         <div style={{ marginTop: '16px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          {[['#22c55e','≥ 0.8 Alta'],['#86efac','0.5–0.8 Moderada'],['#f59e0b','0.2–0.5 Baja'],['#64748b','-0.2–0.2 Nula'],['#f87171','-0.5–-0.2 Inv. baja'],['#ef4444','< -0.5 Inv. alta']].map(([c,l]) => (
+          {[['#22c55e','≥ 0.8 Alta'],['#86efac','0.5–0.8 Mod.'],['#f59e0b','0.2–0.5 Baja'],['#64748b','-0.2–0.2 Nula'],['#f87171','< -0.2 Inv.'],['#ef4444','< -0.5 Inv. alta']].map(([c,l]) => (
             <div key={l} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: c }} />
               <span style={{ fontSize: '11px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>{l}</span>
@@ -236,11 +249,10 @@ function TabCorrelacion({ items }: { items: TickerItem[] }) {
   );
 }
 
-// ── Tab: Gráficos ────────────────────────────────────────────────────────────
 function TabGraficos({ items }: { items: TickerItem[] }) {
+  const isMobile = useIsMobile();
   const [rango, setRango] = useState<'7d'|'30d'|'3m'|'ytd'|'1y'>('1y');
   const [activos, setActivos] = useState<Set<string>>(() => new Set(items.map(t => t.ticker)));
-
   const withH = items.filter(t => t.historico && t.historico.length > 0);
   if (!withH.length) return <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>Cargando datos históricos...</div>;
 
@@ -252,8 +264,7 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
   }
   function normalizar(h: Hist[]) {
     if (!h.length) return {};
-    const base = h[0].cierre;
-    const m: Record<string,number> = {};
+    const base = h[0].cierre; const m: Record<string,number> = {};
     h.forEach(d => { m[d.fecha] = +((d.cierre-base)/base*100).toFixed(2); });
     return m;
   }
@@ -261,10 +272,8 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
   const allDates = Array.from(new Set(withH.flatMap(t => filtrar(t.historico!).map(d => d.fecha)))).sort();
   const step = Math.max(1, Math.floor(allDates.length/200));
   const sampled = allDates.filter((_,i) => i%step===0 || i===allDates.length-1);
-
   const normMaps: Record<string,Record<string,number>> = {};
   withH.forEach(t => { normMaps[t.ticker] = normalizar(filtrar(t.historico!)); });
-
   const chartData = sampled.map(fecha => {
     const point: any = { fecha };
     withH.filter(t => activos.has(t.ticker)).forEach(t => { point[t.ticker] = normMaps[t.ticker]?.[fecha] ?? null; });
@@ -282,41 +291,39 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div className="label-xs" style={{ marginBottom: '4px' }}>📉 Rendimiento Histórico</div>
-          <div style={{ fontSize: '12px', color: 'var(--muted)' }}>% de cambio desde el inicio del período seleccionado</div>
+          <div style={{ fontSize: '12px', color: 'var(--muted)' }}>% de cambio desde el inicio del período</div>
         </div>
         <div style={{ display: 'flex', gap: '4px', background: 'var(--surface2)', borderRadius: '8px', padding: '4px' }}>
           {(['7d','30d','3m','ytd','1y'] as const).map(r => (
-            <button key={r} onClick={() => setRango(r)} style={{ background: rango===r?'var(--violet)':'transparent', color: rango===r?'#fff':'var(--muted2)', border: 'none', borderRadius: '6px', padding: '4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
+            <button key={r} onClick={() => setRango(r)} style={{ background: rango===r?'var(--violet)':'transparent', color: rango===r?'#fff':'var(--muted2)', border: 'none', borderRadius: '6px', padding: isMobile ? '4px 8px' : '4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
               {r.toUpperCase()}
             </button>
           ))}
         </div>
       </div>
-
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
         {withH.map((t, i) => (
           <button key={t.ticker} onClick={() => toggleTicker(t.ticker)}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: activos.has(t.ticker) ? `${COLORS[i%COLORS.length]}20` : 'var(--surface2)', border: `1px solid ${activos.has(t.ticker) ? COLORS[i%COLORS.length] : 'var(--border)'}`, borderRadius: '20px', padding: '4px 12px', cursor: 'pointer', transition: 'all 0.15s' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: activos.has(t.ticker)?`${COLORS[i%COLORS.length]}20`:'var(--surface2)', border: `1px solid ${activos.has(t.ticker)?COLORS[i%COLORS.length]:'var(--border)'}`, borderRadius: '20px', padding: '4px 12px', cursor: 'pointer', transition: 'all 0.15s' }}>
             <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS[i%COLORS.length] }} />
-            <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: activos.has(t.ticker) ? COLORS[i%COLORS.length] : 'var(--muted2)' }}>{t.ticker}</span>
+            <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: activos.has(t.ticker)?COLORS[i%COLORS.length]:'var(--muted2)' }}>{t.ticker}</span>
           </button>
         ))}
       </div>
-
-      <ResponsiveContainer width="100%" height={320}>
-        <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+      <ResponsiveContainer width="100%" height={isMobile ? 220 : 320}>
+        <LineChart data={chartData} margin={{ top: 5, right: isMobile ? 5 : 20, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
           <XAxis dataKey="fecha" tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
             tickFormatter={v => { const d = new Date(v); return `${d.getDate()}/${d.getMonth()+1}/${String(d.getFullYear()).slice(-2)}`; }}
             interval="preserveStartEnd" />
           <YAxis tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-            tickFormatter={v => `${v>0?'+':''}${v.toFixed(0)}%`} width={55} />
+            tickFormatter={v => `${v>0?'+':''}${v.toFixed(0)}%`} width={isMobile ? 40 : 55} />
           <Tooltip
             contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
             formatter={(value: number, name: string) => [`${value>0?'+':''}${value?.toFixed(2)}%`, name]}
             labelFormatter={v => new Date(v).toLocaleDateString('es-AR')}
           />
-          {withH.filter(t => activos.has(t.ticker)).map((t, i) => (
+          {withH.filter(t => activos.has(t.ticker)).map((t) => (
             <Line key={t.ticker} type="monotone" dataKey={t.ticker}
               stroke={COLORS[items.findIndex(it => it.ticker === t.ticker) % COLORS.length]}
               strokeWidth={2} dot={false} connectNulls />
@@ -327,13 +334,11 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
   );
 }
 
-// ── Tab: Analistas ───────────────────────────────────────────────────────────
 function TabAnalistas({ items }: { items: TickerItem[] }) {
   const withData = items.filter(t => (t.strongBuy+t.buy+t.hold+t.sell+t.strongSell) > 0);
   if (!withData.length) return <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '40px', fontFamily: 'DM Mono, monospace' }}>No hay datos de analistas para los activos seleccionados.</div>;
-
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
       {withData.map((t, ti) => {
         const total = t.strongBuy+t.buy+t.hold+t.sell+t.strongSell;
         const buyT = t.strongBuy+t.buy, sellT = t.sell+t.strongSell;
@@ -347,7 +352,6 @@ function TabAnalistas({ items }: { items: TickerItem[] }) {
           { l:'Venta', v:t.sell, c:'#f87171' },
           { l:'Venta Fuerte', v:t.strongSell, c:'#ef4444' },
         ].filter(s => s.v > 0);
-
         return (
           <div key={t.ticker} className="card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -376,8 +380,8 @@ function TabAnalistas({ items }: { items: TickerItem[] }) {
   );
 }
 
-// ── Tab: Resumen IA ──────────────────────────────────────────────────────────
 function TabIA({ items }: { items: TickerItem[] }) {
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -385,13 +389,7 @@ function TabIA({ items }: { items: TickerItem[] }) {
   const generar = async () => {
     setLoading(true); setError(null);
     try {
-      const payload = items.map(t => ({
-        ticker: t.ticker, nombre: t.nombre, precio: t.precio, variacion: t.variacion,
-        varMensual: t.varMensual, varAnual: t.varAnual, marketCap: t.marketCap,
-        per: t.per, eps: t.eps, beta: t.beta,
-        strongBuy: t.strongBuy, buy: t.buy, hold: t.hold, sell: t.sell, strongSell: t.strongSell,
-        numAnalistas: t.numAnalistas,
-      }));
+      const payload = items.map(t => ({ ticker: t.ticker, nombre: t.nombre, precio: t.precio, variacion: t.variacion, varMensual: t.varMensual, varAnual: t.varAnual, marketCap: t.marketCap, per: t.per, eps: t.eps, beta: t.beta, strongBuy: t.strongBuy, buy: t.buy, hold: t.hold, sell: t.sell, strongSell: t.strongSell, numAnalistas: t.numAnalistas }));
       const res = await fetch('/api/ai-resumen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tickers: payload }) });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -408,9 +406,7 @@ function TabIA({ items }: { items: TickerItem[] }) {
     <div className="card" style={{ textAlign: 'center', padding: '60px 40px' }}>
       <div style={{ fontSize: '36px', marginBottom: '16px' }}>🤖</div>
       <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)', marginBottom: '8px' }}>Resumen IA</div>
-      <div style={{ fontSize: '13px', color: 'var(--muted2)', marginBottom: '24px' }}>
-        Análisis automático de los {items.length} activos seleccionados usando inteligencia artificial.
-      </div>
+      <div style={{ fontSize: '13px', color: 'var(--muted2)', marginBottom: '24px' }}>Análisis automático de los {items.length} activos seleccionados.</div>
       <button onClick={generar} disabled={loading} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px' }}>
         <Sparkles size={16} /> {loading ? 'Analizando...' : 'Generar Análisis'}
       </button>
@@ -420,7 +416,7 @@ function TabIA({ items }: { items: TickerItem[] }) {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
         {[
           { label: 'Riesgo general', value: result.riesgo_general, color: RC[result.riesgo_general] },
           { label: 'Sesgo de mercado', value: result.sesgo_mercado, color: SC[result.sesgo_mercado] },
@@ -444,22 +440,21 @@ function TabIA({ items }: { items: TickerItem[] }) {
         )}
       </div>
 
-      {/* Análisis por empresa */}
-{result.analisis_empresas?.length > 0 && (
-  <div className="card" style={{ marginBottom: '16px' }}>
-    <div className="label-xs" style={{ marginBottom: '16px' }}>🏢 Análisis por empresa</div>
-    {result.analisis_empresas.map((e: any, i: number) => (
-      <div key={e.ticker} style={{ marginBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', paddingBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', borderBottom: i < result.analisis_empresas.length-1 ? '1px solid var(--border)' : 'none' }}>
-        <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: COLORS[items.findIndex(t => t.ticker === e.ticker) % COLORS.length], marginBottom: '6px' }}>{e.ticker}</div>
-        {e.descripcion && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '6px' }}>{e.descripcion}</div>}
-        {e.drivers && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '4px' }}><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Drivers: </span>{e.drivers}</div>}
-        {e.tesis && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>Tesis: </span>{e.tesis}</div>}
-      </div>
-    ))}
-  </div>
-)}
+      {result.analisis_empresas?.length > 0 && (
+        <div className="card" style={{ marginBottom: '16px' }}>
+          <div className="label-xs" style={{ marginBottom: '16px' }}>🏢 Análisis por empresa</div>
+          {result.analisis_empresas.map((e: any, i: number) => (
+            <div key={e.ticker} style={{ marginBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', paddingBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', borderBottom: i < result.analisis_empresas.length-1 ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: COLORS[items.findIndex(t => t.ticker === e.ticker) % COLORS.length], marginBottom: '6px' }}>{e.ticker}</div>
+              {e.descripcion && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '6px' }}>{e.descripcion}</div>}
+              {e.drivers && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '4px' }}><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Drivers: </span>{e.drivers}</div>}
+              {e.tesis && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>Tesis: </span>{e.tesis}</div>}
+            </div>
+          ))}
+        </div>
+      )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>💡 Insights clave</div>
           {result.insights?.map((ins: string, i: number) => (
@@ -491,7 +486,6 @@ function TabIA({ items }: { items: TickerItem[] }) {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
 const TABS = [
   { key: 'precios' as Tab,       label: 'Precios',       icon: '📈' },
   { key: 'fundamentales' as Tab, label: 'Fundamentales', icon: '📊' },
@@ -503,6 +497,7 @@ const TABS = [
 
 export default function DashboardPage() {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>('precios');
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
@@ -512,27 +507,18 @@ export default function DashboardPage() {
   useEffect(() => {
     const saved = localStorage.getItem(LS_KEY);
     if (saved) {
-      try {
-        const tickers: string[] = JSON.parse(saved);
-        tickers.forEach(t => addTicker(t, true));
-      } catch {}
+      try { const tickers: string[] = JSON.parse(saved); tickers.forEach(t => addTicker(t, true)); } catch {}
     }
   }, []);
 
   useEffect(() => {
-    if (items.length > 0) {
-      localStorage.setItem(LS_KEY, JSON.stringify(items.map(t => t.ticker)));
-    }
+    if (items.length > 0) localStorage.setItem(LS_KEY, JSON.stringify(items.map(t => t.ticker)));
   }, [items.map(t => t.ticker).join(',')]);
 
   useEffect(() => {
     if (['graficos','correlacion','precios'].includes(tab) && !histLoaded) {
       setHistLoaded(true);
-      items.forEach(t => {
-        if (!t.historico && !t.loadingHistory) {
-          cargarHist(t.ticker, t.usTicker, t.sufixFundamentals);
-        }
-      });
+      items.forEach(t => { if (!t.historico && !t.loadingHistory) cargarHist(t.ticker, t.usTicker, t.sufixFundamentals); });
     }
   }, [tab]);
 
@@ -544,18 +530,14 @@ export default function DashboardPage() {
       const precio = data.tipo === 'cedear' ? data.precio?.valor : (data.precio?.valor ?? data.precio);
       const variacion = data.tipo === 'cedear' ? data.precio?.variacion : data.variacion;
       return {
-        nombre: data.nombre || data.spec?.nombre || ticker,
-        tipo: data.tipo || 'renta_variable',
+        nombre: data.nombre || data.spec?.nombre || ticker, tipo: data.tipo || 'renta_variable',
         moneda: data.tipo === 'cedear' ? (data.precio?.moneda || 'ARS') : (data.monedaLabel || 'USD'),
         precio: typeof precio === 'number' ? precio : null,
         variacion: typeof variacion === 'number' ? variacion : null,
-        usTicker: data.usTicker || ticker,
-        sufixFundamentals: data.sufixFundamentals || '',
-        marketCap: data.marketCap ?? null, per: data.per ?? null,
-        eps: data.eps ?? null, beta: data.beta ?? null,
+        usTicker: data.usTicker || ticker, sufixFundamentals: data.sufixFundamentals || '',
+        marketCap: data.marketCap ?? null, per: data.per ?? null, eps: data.eps ?? null, beta: data.beta ?? null,
         maximo52: data.maximo52 ?? null, minimo52: data.minimo52 ?? null,
-        strongBuy: data.strongBuy ?? 0, buy: data.buy ?? 0,
-        hold: data.hold ?? 0, sell: data.sell ?? 0, strongSell: data.strongSell ?? 0,
+        strongBuy: data.strongBuy ?? 0, buy: data.buy ?? 0, hold: data.hold ?? 0, sell: data.sell ?? 0, strongSell: data.strongSell ?? 0,
         numAnalistas: data.numAnalistas ?? null,
       };
     } catch { return {}; }
@@ -568,10 +550,7 @@ export default function DashboardPage() {
       const data = await res.json();
       if (data.historico?.length > 0) {
         const h: Hist[] = data.historico;
-        setItems(prev => prev.map(t => t.ticker === ticker ? {
-          ...t, historico: h, loadingHistory: false,
-          varMensual: varPeriodo(h, 30), varAnual: varPeriodo(h, 365), volatilidad: volatilidad(h),
-        } : t));
+        setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, historico: h, loadingHistory: false, varMensual: varPeriodo(h, 30), varAnual: varPeriodo(h, 365), volatilidad: volatilidad(h) } : t));
       } else {
         setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, loadingHistory: false } : t));
       }
@@ -583,7 +562,6 @@ export default function DashboardPage() {
   async function addTicker(rawTicker: string, silent = false) {
     const ticker = rawTicker.toUpperCase().trim();
     if (!ticker || items.some(t => t.ticker === ticker)) return;
-
     const base: TickerItem = {
       ticker, nombre: null, tipo: 'renta_variable', moneda: 'USD',
       precio: null, variacion: null, usTicker: ticker, sufixFundamentals: '',
@@ -592,13 +570,10 @@ export default function DashboardPage() {
       historico: null, varMensual: null, varAnual: null, volatilidad: null,
       loading: true, loadingFunds: false, loadingHistory: false,
     };
-
     setItems(prev => [...prev, base]);
     if (!silent) setQuery('');
-
     const basicData = await fetchBasico(ticker);
     setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, ...basicData, loading: false } : t));
-
     const hasFunds = basicData.marketCap != null || basicData.per != null;
     if (!hasFunds && basicData.usTicker) {
       setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, loadingFunds: true } : t));
@@ -609,7 +584,6 @@ export default function DashboardPage() {
         else setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, loadingFunds: false } : t));
       } catch { setItems(prev => prev.map(t => t.ticker === ticker ? { ...t, loadingFunds: false } : t)); }
     }
-
     if (['graficos','correlacion','precios'].includes(tab) || histLoaded) {
       await cargarHist(ticker, basicData.usTicker || ticker, basicData.sufixFundamentals || '');
     }
@@ -630,16 +604,14 @@ export default function DashboardPage() {
 
   const handleSearch = async () => {
     if (!query.trim() || adding) return;
-    setAdding(true);
-    await addTicker(query);
-    setAdding(false);
+    setAdding(true); await addTicker(query); setAdding(false);
   };
 
   return (
     <div style={{ maxWidth: '1100px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Dashboard</h1>
+          <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: isMobile ? '20px' : '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Dashboard</h1>
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Análisis comparativo de mercado</div>
         </div>
         {items.length > 0 && (
@@ -650,16 +622,16 @@ export default function DashboardPage() {
       </div>
 
       <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '10px', marginBottom: items.length > 0 ? '16px' : '0' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: items.length > 0 ? '16px' : '0', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: isMobile ? '100%' : '0' }}>
             <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
             <input className="input-field" style={{ paddingLeft: '36px' }}
-              placeholder="Agregá un ticker: AAPL · NVDA · GD35 · GGAL · GOOGLD..."
+              placeholder="AAPL · NVDA · GD35 · GGAL..."
               value={query}
               onChange={e => setQuery(e.target.value.toUpperCase())}
               onKeyDown={e => e.key === 'Enter' && handleSearch()} />
           </div>
-          <button className="btn-primary" onClick={handleSearch} disabled={adding || !query.trim()} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button className="btn-primary" onClick={handleSearch} disabled={adding || !query.trim()} style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
             <Plus size={16} /> {adding ? 'Agregando...' : 'Añadir'}
           </button>
         </div>
@@ -670,9 +642,7 @@ export default function DashboardPage() {
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS[i%COLORS.length] }} />
                 <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: COLORS[i%COLORS.length] }}>{t.ticker}</span>
                 {t.loading && <span style={{ fontSize: '10px', color: 'var(--muted)' }}>...</span>}
-                <button onClick={() => removeTicker(t.ticker)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: 'var(--muted)', marginLeft: '2px' }}>
-                  <X size={12} />
-                </button>
+                <button onClick={() => removeTicker(t.ticker)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: 'var(--muted)', marginLeft: '2px' }}><X size={12} /></button>
               </div>
             ))}
           </div>
@@ -683,17 +653,15 @@ export default function DashboardPage() {
         <div className="card" style={{ textAlign: 'center', padding: '60px 40px' }}>
           <div style={{ fontSize: '40px', marginBottom: '16px' }}>📊</div>
           <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)', marginBottom: '8px' }}>Agregá tickers para empezar</div>
-          <div style={{ fontSize: '13px', color: 'var(--muted2)', maxWidth: '400px', margin: '0 auto' }}>
-            Buscá cualquier activo: acciones US, CEDEARs, acciones argentinas o bonos. Podés comparar hasta 10 activos simultáneamente.
-          </div>
+          <div style={{ fontSize: '13px', color: 'var(--muted2)', maxWidth: '400px', margin: '0 auto' }}>Buscá acciones US, CEDEARs, acciones argentinas o bonos. Podés comparar hasta 10 activos.</div>
         </div>
       ) : (
         <>
           <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', overflowX: 'auto' }}>
             {TABS.map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab===t.key?'var(--violet)':'transparent', color: tab===t.key?'#fff':'var(--muted2)', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
-                <span>{t.icon}</span> {t.label}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab===t.key?'var(--violet)':'transparent', color: tab===t.key?'#fff':'var(--muted2)', border: 'none', borderRadius: '8px', padding: isMobile ? '8px 10px' : '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: isMobile ? '11px' : '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
+                <span>{t.icon}</span>{!isMobile && ` ${t.label}`}
               </button>
             ))}
           </div>
