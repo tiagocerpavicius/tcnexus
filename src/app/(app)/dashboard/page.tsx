@@ -42,11 +42,16 @@ function volatilidad(h: Hist[]): number | null {
 }
 function varPeriodo(h: Hist[], dias: number): number | null {
   if (h.length < 2) return null;
-  const hoy = h[h.length-1].cierre;
-  const corte = new Date(); corte.setDate(corte.getDate()-dias);
-  const pasado = [...h].reverse().find(d => new Date(d.fecha) <= corte);
-  if (!pasado) return null;
-  return +((hoy - pasado.cierre)/pasado.cierre*100).toFixed(2);
+  const hoy = h[h.length - 1].cierre;
+  const corte = new Date();
+  corte.setDate(corte.getDate() - dias);
+  const corteStr = corte.toISOString().split('T')[0];
+  const pasado = [...h].reverse().find(d => d.fecha <= corteStr);
+  if (!pasado) {
+    if (dias >= 300) return +((hoy - h[0].cierre) / h[0].cierre * 100).toFixed(2);
+    return null;
+  }
+  return +((hoy - pasado.cierre) / pasado.cierre * 100).toFixed(2);
 }
 function pearson(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length); if (n < 5) return 0;
