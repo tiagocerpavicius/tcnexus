@@ -125,11 +125,20 @@ function pnlColor(pct: number | null): string {
 
 function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
-  const transferCostPerUnit = new Map<string, number>(); // costo heredado traspaso
+  const transferCostPerUnit = new Map<string, number>();
 
-  // PASO 1: compras, ventas, traspaso OUT
-  for (const op of ops.filter(o => ['compra','venta','traspaso'].includes(o.tipo))) {
-    if (op.tipo === 'traspaso' && op.notas === 'in') continue;
+  // Orden cronológico — traspaso_out ANTES que traspaso_in el mismo día
+  const sorted = [...ops].sort((a, b) => {
+    const d = a.fecha.localeCompare(b.fecha);
+    if (d !== 0) return d;
+    if (a.tipo === 'traspaso' && b.tipo === 'traspaso') {
+      if (a.notas === 'out' && b.notas === 'in') return -1;
+      if (a.notas === 'in' && b.notas === 'out') return 1;
+    }
+    return 0;
+  });
+
+  for (const op of sorted.filter(o => ['compra','venta','traspaso'].includes(o.tipo))) {
     const tickerKey = normalizarTicker(op.ticker);
     const tickerOriginal = op.ticker.toUpperCase();
     if (!map.has(tickerKey)) {
@@ -148,30 +157,20 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
       pos.costoTotalUSD *= (1 - pct);
       pos.cantidad -= (op.cantidad || 0);
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && pos.cantidad > 0) {
-      // Traspaso OUT: cerrar posición en broker origen, guardar costo por unidad
       const qty = Math.min(op.cantidad || 0, pos.cantidad);
       const costPerUnit = pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0;
       transferCostPerUnit.set(tickerKey, costPerUnit);
       const pct = qty / pos.cantidad;
       pos.costoTotalUSD *= (1 - pct);
       pos.cantidad -= qty;
+    } else if (op.tipo === 'traspaso' && op.notas === 'in') {
+      const qty = op.cantidad || 0;
+      const costPerUnit = transferCostPerUnit.get(tickerKey) || 0;
+      pos.cantidad += qty;
+      pos.costoTotalUSD += costPerUnit * qty;
+      pos.broker = op.broker || pos.broker;
+      if (tickerOriginal.endsWith('D') && !NO_NORMALIZAR_D.has(tickerOriginal)) pos.tickerBuscar = tickerOriginal;
     }
-  }
-
-  // PASO 2: traspaso IN (hereda costo del traspaso OUT del mismo ticker)
-  for (const op of ops.filter(o => o.tipo === 'traspaso' && o.notas === 'in')) {
-    const tickerKey = normalizarTicker(op.ticker);
-    const tickerOriginal = op.ticker.toUpperCase();
-    if (!map.has(tickerKey)) {
-      map.set(tickerKey, { ticker: tickerKey, tickerBuscar: tickerOriginal, nombre: op.nombre || tickerKey, tipo_activo: op.tipo_activo || 'cedear', broker: op.broker || '—', moneda: op.moneda || 'ARS', cantidad: 0, costoTotalUSD: 0 });
-    }
-    const pos = map.get(tickerKey)!;
-    const qty = op.cantidad || 0;
-    const costPerUnit = transferCostPerUnit.get(tickerKey) || 0;
-    pos.cantidad += qty;
-    pos.costoTotalUSD += costPerUnit * qty; // costo heredado del broker origen
-    pos.broker = op.broker || pos.broker;
-    if (tickerOriginal.endsWith('D') && !NO_NORMALIZAR_D.has(tickerOriginal)) pos.tickerBuscar = tickerOriginal;
   }
 
   Array.from(map.keys()).forEach(k => { if (map.get(k)!.cantidad <= 0.000001) map.delete(k); });
@@ -196,15 +195,25 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
   const realizadasMap = new Map<string, GananciaRealizada>();
   const transferCostPerUnit = new Map<string, number>();
 
-  // PASO 1: compras, ventas, traspaso OUT
-  for (const op of ops.filter(o => ['compra','venta','traspaso'].includes(o.tipo))) {
-    if (op.tipo === 'traspaso' && op.notas === 'in') continue;
+  // Mismo orden que calcularPosicionesBase
+  const sorted = [...ops].sort((a, b) => {
+    const d = a.fecha.localeCompare(b.fecha);
+    if (d !== 0) return d;
+    if (a.tipo === 'traspaso' && b.tipo === 'traspaso') {
+      if (a.notas === 'out' && b.notas === 'in') return -1;
+      if (a.notas === 'in' && b.notas === 'out') return 1;
+    }
+    return 0;
+  });
+
+  for (const op of sorted.filter(o => ['compra','venta','traspaso'].includes(o.tipo))) {
     const key = normalizarTicker(op.ticker);
     if (!bases.has(key)) bases.set(key, { costoTotal: 0, cantidad: 0, nombre: op.nombre || key, tipo_activo: op.tipo_activo || 'otro' });
     const base = bases.get(key)!;
 
     if (op.tipo === 'compra') {
-      base.costoTotal += op.monto_usd; base.cantidad += (op.cantidad || 0);
+      base.costoTotal += op.monto_usd;
+      base.cantidad += (op.cantidad || 0);
     } else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
@@ -212,30 +221,28 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
       const ganancia = op.monto_usd - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
-      real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
-      real.gananciaUSD += ganancia; real.cantidadVendida += cantVendida;
-      base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
+      real.montoVentaUSD += op.monto_usd;
+      real.costoRealizadoUSD += costoVendido;
+      real.gananciaUSD += ganancia;
+      real.cantidadVendida += cantVendida;
+      base.costoTotal -= costoVendido;
+      base.cantidad -= cantVendida;
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && base.cantidad > 0) {
-      // Traspaso OUT: mover costo sin generar P&L realizado
       const qty = Math.min(op.cantidad || 0, base.cantidad);
       const costPerUnit = base.cantidad > 0 ? base.costoTotal / base.cantidad : 0;
       transferCostPerUnit.set(key, costPerUnit);
       const pct = qty / base.cantidad;
-      base.costoTotal *= (1 - pct); base.cantidad -= qty;
+      base.costoTotal *= (1 - pct);
+      base.cantidad -= qty;
+    } else if (op.tipo === 'traspaso' && op.notas === 'in') {
+      const qty = op.cantidad || 0;
+      const costPerUnit = transferCostPerUnit.get(key) || 0;
+      base.costoTotal += costPerUnit * qty;
+      base.cantidad += qty;
     }
   }
 
-  // PASO 2: traspaso IN (hereda costo)
-  for (const op of ops.filter(o => o.tipo === 'traspaso' && o.notas === 'in')) {
-    const key = normalizarTicker(op.ticker);
-    if (!bases.has(key)) bases.set(key, { costoTotal: 0, cantidad: 0, nombre: op.nombre || key, tipo_activo: op.tipo_activo || 'cedear' });
-    const base = bases.get(key)!;
-    const qty = op.cantidad || 0;
-    const costPerUnit = transferCostPerUnit.get(key) || 0;
-    base.costoTotal += costPerUnit * qty; base.cantidad += qty;
-  }
-
-  // Bonos/letras vencidos sin venta explícita
+  // Vencidos sin venta explícita
   const hoy = new Date();
   for (const [key, base] of Array.from(bases.entries())) {
     if (base.cantidad <= 0.000001) continue;
