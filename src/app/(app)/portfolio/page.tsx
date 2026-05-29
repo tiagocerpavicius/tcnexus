@@ -300,11 +300,6 @@ function parseIOLTipoMov(tipoMov: string): { tipo: 'compra'|'venta'|'dividendo'|
   return null;
 }
 
-// Normaliza texto quitando tildes para comparaciones
-function normCuenta(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
 function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -356,8 +351,8 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'s
       monto_usd = moneda === 'USD' ? montoARS : montoARS / mep;
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
     } else {
-      const usdRow = rows.find(r => normCuenta(r['Tipo Cuenta'] || '').includes('dolar') && parseIOLMonto(r['Monto']) > 0);
-      const arsRow = rows.find(r => normCuenta(r['Tipo Cuenta'] || '').includes('peso') && parseIOLMonto(r['Monto']) > 0);
+      const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
+      const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
       if (usdRow) { moneda = 'USD'; monto_usd = parseIOLMonto(usdRow['Monto']); precio_unitario = parseFloat(String(usdRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(usdRow['Cant. titulos']) || null; fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']); }
       else if (arsRow) { moneda = 'ARS'; monto_usd = parseIOLMonto(arsRow['Monto']) / mep; precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(arsRow['Cant. titulos']) || null; fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']); }
       else { continue; }
@@ -1006,9 +1001,179 @@ function EmptyState({ onAdd, onImport }: { onAdd: () => void; onImport: () => vo
   );
 }
 
+// ── Tab: Resumen ──────────────────────────────────────────────────────────────
+
+function TabResumen({ posiciones, efectivoUSD, mep, totalInvertidoUSD, realizadas }: {
+  posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number;
+  totalInvertidoUSD: number; realizadas: GananciaRealizada[];
+}) {
+  const isMobile = useIsMobile();
+  const [cauc, setCauc] = useState<{
+    netUSD: number; netARS: number; capitalUSD: number; capitalARS: number;
+    pnlActivosUSD: number; pnlActivosARS: number; costoUSD: number; costoARS: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const [caucRes, perRes, actRes] = await Promise.all([
+        supabase.from('cauciones').select('id,monto,tna,plazo,moneda'),
+        supabase.from('caucion_periodos').select('caucion_id,intereses'),
+        supabase.from('cedears_arb').select('precio_compra,precio_actual,precio_venta,cantidad,moneda'),
+      ]);
+      if (!caucRes.data || !perRes.data || !actRes.data) return;
+      const costos: Record<string, number> = {};
+      perRes.data.forEach((p: any) => { costos[p.caucion_id] = (costos[p.caucion_id] || 0) + p.intereses; });
+      const calc = (mon: string) => {
+        const caucs = caucRes.data!.filter((c: any) => (c.moneda || 'USD') === mon);
+        const acts = actRes.data!.filter((a: any) => (a.moneda || 'USD') === mon);
+        const capitalCauciones = caucs.reduce((t: number, c: any) => t + c.monto, 0);
+        const costoCauciones = caucs.reduce((t: number, c: any) => t + (costos[c.id] || 0) + c.monto * (c.tna / 100) * (c.plazo / 365), 0);
+        const valorActivos = acts.reduce((t: number, a: any) => t + (a.precio_venta ?? a.precio_actual) * a.cantidad, 0);
+        const costoActivos = acts.reduce((t: number, a: any) => t + a.precio_compra * a.cantidad, 0);
+        const pnlActivos = valorActivos - costoActivos;
+        return { capitalCauciones, costoCauciones, pnlActivos, neto: pnlActivos - costoCauciones };
+      };
+      const u = calc('USD'), a = calc('ARS');
+      setCauc({ netUSD: u.neto, netARS: a.neto, capitalUSD: u.capitalCauciones, capitalARS: a.capitalCauciones, pnlActivosUSD: u.pnlActivos, pnlActivosARS: a.pnlActivos, costoUSD: u.costoCauciones, costoARS: a.costoCauciones });
+    };
+    load();
+  }, []);
+
+  const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
+  const portfolioUSD = totalActivosUSD + efectivoUSD;
+  const caucionNetUSD = cauc?.netUSD ?? 0;
+  const caucionNetARStoUSD = cauc ? cauc.netARS / mep : 0;
+  const hasCauc = cauc && (cauc.capitalUSD > 0 || cauc.capitalARS > 0);
+  const capitalTotal = portfolioUSD + caucionNetUSD + caucionNetARStoUSD;
+  const gananciaNeta = capitalTotal - totalInvertidoUSD;
+  const retorno = totalInvertidoUSD > 0 ? (gananciaNeta / totalInvertidoUSD) * 100 : 0;
+  const pnlNoRealizado = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
+  const pnlRealizado = realizadas.reduce((s, r) => s + r.gananciaUSD, 0);
+  const pnlPortfolioTotal = pnlNoRealizado + pnlRealizado;
+  const costoTotalPortfolio = posiciones.reduce((s, p) => s + p.costoTotalUSD, 0);
+  const retornoPortfolio = costoTotalPortfolio > 0 ? (pnlPortfolioTotal / costoTotalPortfolio) * 100 : 0;
+
+  // Distribución por tipo
+  const byTipo = posiciones.filter(p => (p.valorActualUSD || 0) > 0).reduce((acc, p) => {
+    const tipo = TIPO_LABELS[p.tipo_activo] || p.tipo_activo;
+    const ex = acc.find(a => a.name === tipo);
+    if (ex) ex.value += p.valorActualUSD!; else acc.push({ name: tipo, value: p.valorActualUSD! });
+    return acc;
+  }, [] as { name: string; value: number }[]);
+  if (efectivoUSD > 0) byTipo.push({ name: 'Liquidez', value: efectivoUSD });
+  if (hasCauc && caucionNetUSD > 0) byTipo.push({ name: 'Cauciones USD', value: caucionNetUSD });
+  if (hasCauc && caucionNetARStoUSD > 0) byTipo.push({ name: 'Cauciones ARS', value: caucionNetARStoUSD });
+  const distData = byTipo.filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+  const distTotal = distData.reduce((s, d) => s + d.value, 0);
+
+  // Por estrategia
+  const strategies = [
+    { label: 'Portfolio', icon: '📋', valor: portfolioUSD, pnl: pnlPortfolioTotal, pct: retornoPortfolio, share: distTotal > 0 ? (portfolioUSD / distTotal) * 100 : 0, color: 'var(--violet-light)' },
+    ...(hasCauc && cauc!.capitalUSD > 0 ? [{ label: 'Cauciones USD', icon: '⚡', valor: caucionNetUSD, pnl: cauc!.netUSD, pct: cauc!.capitalUSD > 0 ? (cauc!.netUSD / cauc!.capitalUSD) * 100 : 0, share: distTotal > 0 ? (Math.max(0, caucionNetUSD) / distTotal) * 100 : 0, color: 'var(--green)' }] : []),
+    ...(hasCauc && cauc!.capitalARS > 0 ? [{ label: 'Cauciones ARS', icon: '⚡', valor: caucionNetARStoUSD, pnl: cauc!.netARS / mep, pct: cauc!.capitalARS > 0 ? (cauc!.netARS / cauc!.capitalARS) * 100 : 0, share: distTotal > 0 ? (Math.max(0, caucionNetARStoUSD) / distTotal) * 100 : 0, color: 'var(--amber)' }] : []),
+  ];
+
+  const top5 = [...posiciones].filter(p => p.pnlPct != null && p.pnlPct > 0).sort((a, b) => b.pnlPct! - a.pnlPct!).slice(0, 5);
+  const bot5 = [...posiciones].filter(p => p.pnlPct != null && p.pnlPct < 0).sort((a, b) => a.pnlPct! - b.pnlPct!).slice(0, 5);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Cards principales */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '10px' }}>
+        {[
+          { label: 'CAPITAL TOTAL', value: fmtUSD(capitalTotal), sub: 'Portfolio + Cauciones', color: 'var(--text)', accent: true },
+          { label: 'CAPITAL INICIAL', value: fmtUSD(totalInvertidoUSD), sub: 'Depósitos netos', color: 'var(--text)', accent: false },
+          { label: 'GANANCIA TOTAL', value: (gananciaNeta >= 0 ? '+' : '') + fmtUSD(gananciaNeta), sub: 'Realizada + abierta', color: colorV(gananciaNeta), accent: false, border: gananciaNeta >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' },
+          { label: 'RETORNO TOTAL', value: (retorno >= 0 ? '+' : '') + retorno.toFixed(2) + '%', sub: 'Sobre capital inicial', color: colorV(retorno), accent: false, border: retorno >= 0 ? 'rgba(34,197,94,0.2)' : 'rgba(244,63,94,0.2)' },
+        ].map(m => (
+          <div key={m.label} className="card" style={{ borderColor: (m as any).border || (m.accent ? 'rgba(124,58,237,0.4)' : undefined) }}>
+            <div className="label-xs" style={{ marginBottom: '8px' }}>{m.label}</div>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: isMobile ? '16px' : '20px', fontWeight: 600, color: m.color, lineHeight: 1, marginBottom: '4px' }}>{m.value}</div>
+            <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{m.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Distribución + Por estrategia */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
+        {/* Donut */}
+        <div className="card">
+          <div className="label-xs" style={{ marginBottom: '16px' }}>🥧 Distribución de cartera</div>
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <PieChart width={150} height={150}>
+              <Pie data={distData} cx={70} cy={70} innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value">
+                {distData.map((_, i) => <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} stroke="transparent" />)}
+              </Pie>
+              <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${distTotal > 0 ? (v / distTotal * 100).toFixed(1) : 0}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' }} />
+            </PieChart>
+            <div style={{ flex: 1, minWidth: '100px' }}>
+              {distData.slice(0, 8).map((d, i) => (
+                <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '2px', background: DIST_COLORS[i % DIST_COLORS.length], flexShrink: 0 }} />
+                  <span style={{ fontSize: '11px', color: 'var(--text2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '10px', color: 'var(--muted)', minWidth: '36px', textAlign: 'right' }}>{distTotal > 0 ? (d.value / distTotal * 100).toFixed(1) : 0}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Por estrategia */}
+        <div className="card">
+          <div className="label-xs" style={{ marginBottom: '16px' }}>📊 Por estrategia</div>
+          {strategies.map((s, i) => (
+            <div key={s.label} style={{ marginBottom: i < strategies.length - 1 ? '16px' : 0, paddingBottom: i < strategies.length - 1 ? '16px' : 0, borderBottom: i < strategies.length - 1 ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: s.color }}>{s.icon} {s.label}</span>
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '15px', fontWeight: 600, color: 'var(--text)' }}>{fmtUSD(s.valor)}</span>
+              </div>
+              <div style={{ height: '4px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden', marginBottom: '8px' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, s.share))}%`, background: s.color, borderRadius: '2px', transition: 'width 0.6s ease' }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{s.share.toFixed(1)}% de la cartera</span>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: colorV(s.pnl) }}>{s.pnl >= 0 ? '+' : ''}{fmtUSD(s.pnl)}</span>
+                  <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: colorV(s.pct), minWidth: '52px', textAlign: 'right' }}>{s.pct >= 0 ? '+' : ''}{s.pct.toFixed(2)}%</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Mejores y peores */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
+        <div className="card">
+          <div className="label-xs" style={{ marginBottom: '12px' }}>🏆 Mejores posiciones</div>
+          {top5.length === 0 ? <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin ganancias abiertas</div> : top5.map((p, i) => (
+            <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
+              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--green)', flexShrink: 0 }}>{i + 1}</div>
+              <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: 'var(--muted)' }}>{fmtUSD(p.pnlUSD)}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--green)', fontWeight: 600, minWidth: '56px', textAlign: 'right' }}>{fmtPct(p.pnlPct)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="card">
+          <div className="label-xs" style={{ marginBottom: '12px' }}>📉 A monitorear</div>
+          {bot5.length === 0 ? <div style={{ color: 'var(--muted)', fontSize: '12px' }}>Sin pérdidas abiertas</div> : bot5.map((p, i) => (
+            <div key={p.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
+              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: 'rgba(244,63,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--red)', flexShrink: 0 }}>{i + 1}</div>
+              <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', flex: 1 }}>{p.ticker}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', color: 'var(--muted)' }}>{fmtUSD(p.pnlUSD)}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: 'var(--red)', fontWeight: 600, minWidth: '56px', textAlign: 'right' }}>{fmtPct(p.pnlPct)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type TabKey = 'posiciones'|'mapa'|'distribucion'|'performance'|'historial'|'operaciones';
+type TabKey = 'resumen'|'posiciones'|'mapa'|'distribucion'|'performance'|'historial'|'operaciones';
 
 export default function PortfolioPage() {
   const isMobile = useIsMobile();
@@ -1019,7 +1184,7 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [mep, setMep] = useState(1430);
-  const [tab, setTab] = useState<TabKey>('posiciones');
+  const [tab, setTab] = useState<TabKey>('resumen');
   const [showModal, setShowModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [efectivoUSD, setEfectivoUSD] = useState(0);
@@ -1060,7 +1225,7 @@ export default function PortfolioPage() {
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
     const posMap = calcularPosicionesBase(ops);
     const totalInv = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0)
-               - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
+                   - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
     const efectivo = calcularEfectivoUSD(ops);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({ ...pos, costoPromedioUSD: pos.cantidad>0?pos.costoTotalUSD/pos.cantidad:0, precioActual:null, valorActualUSD:null, pnlUSD:null, pnlPct:null, variacionDiaria:null, loadingPrecio:true }));
@@ -1173,13 +1338,22 @@ export default function PortfolioPage() {
           )}
 
           <div style={{ display:'flex',gap:'4px',marginBottom:'20px',background:'var(--surface2)',borderRadius:'12px',padding:'4px',overflowX:'auto' }}>
-            {([{key:'posiciones' as TabKey,label:'Posiciones',icon:'📋'},{key:'mapa' as TabKey,label:'Mapa',icon:'🗺️'},{key:'distribucion' as TabKey,label:'Dist.',icon:'🥧'},{key:'performance' as TabKey,label:'Perf.',icon:'🏆'},{key:'historial' as TabKey,label:'Historial',icon:'📈'},{key:'operaciones' as TabKey,label:'Ops.',icon:'📝'}]).map(t=>(
+            {([
+              {key:'resumen' as TabKey,      label:'Resumen',    icon:'🎯'},
+              {key:'posiciones' as TabKey,   label:'Posiciones', icon:'📋'},
+              {key:'mapa' as TabKey,         label:'Mapa',       icon:'🗺️'},
+              {key:'distribucion' as TabKey, label:'Dist.',      icon:'🥧'},
+              {key:'performance' as TabKey,  label:'Perf.',      icon:'🏆'},
+              {key:'historial' as TabKey,    label:'Historial',  icon:'📈'},
+              {key:'operaciones' as TabKey,  label:'Ops.',       icon:'📝'},
+            ]).map(t=>(
               <button key={t.key} onClick={()=>setTab(t.key)} style={{ display:'flex',alignItems:'center',gap:'5px',background:tab===t.key?'var(--violet)':'transparent',color:tab===t.key?'#fff':'var(--muted2)',border:'none',borderRadius:'8px',padding:isMobile?'7px 10px':'8px 14px',cursor:'pointer',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:isMobile?'11px':'13px',whiteSpace:'nowrap',transition:'all 0.15s' }}>
                 <span>{t.icon}</span> {t.label}
               </button>
             ))}
           </div>
 
+          {tab==='resumen'      && <TabResumen posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
           {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} />}
           {tab==='mapa'         && <TabMapa posiciones={posiciones} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
