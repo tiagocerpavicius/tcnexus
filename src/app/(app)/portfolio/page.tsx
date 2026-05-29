@@ -50,6 +50,33 @@ const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6'
 const NO_NORMALIZAR_D = new Set(['YPFD', 'NDD']);
 const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
 const AR_STOCKS = new Set(['GGAL','YPFD','PAMP','TXAR','ALUA','BMA','LOMA','TECO','CEPU','VALO','CRES','IRCP','METR','COME','HARG','RICH','AGRO','SEMI','SUPV','BBAR','BYMA','NQNF','OEST']);
+// Meses para decodificar tickers de letras argentinas
+const MONTH_CODES: Record<string, number> = {
+  'E': 1, 'F': 2, 'M': 3, 'A': 4, 'Y': 5, 'J': 7,
+  'G': 8, 'S': 9, 'O': 10, 'N': 11, 'D': 12,
+};
+
+// Decodifica vencimiento desde ticker de letra argentina
+// S15G5 → 2025-08-15, S30S5 → 2025-09-30
+function getLetraVencimiento(ticker: string): string | null {
+  const m = ticker.toUpperCase().match(/^[SLTRCE](\d{2})([EFMAYGJSOND])(\d)$/);
+  if (!m) return null;
+  const day = parseInt(m[1]);
+  const month = MONTH_CODES[m[2]];
+  const year = 2020 + parseInt(m[3]);
+  if (!month || day < 1 || day > 31) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+// Detecta cualquier instrumento de renta fija argentina
+function isArgentineRentaFija(ticker: string): boolean {
+  const u = ticker.toUpperCase();
+  if (BONOS_SET.has(u)) return true;
+  if (getLetraVencimiento(u) !== null) return true; // LECAPs, BONCAPs, etc.
+  if (/^(AL|GD|AE|GK|TX|BPY|BPJ|BPD|PR)\d{2,4}[A-Z]?$/.test(u)) return true;
+  if (/^(TZ|PBA|PMY|PMO|CUAP|DICP|DICA)\d*[A-Z]?$/.test(u)) return true;
+  return false;
+}
 
 function normalizarTicker(ticker: string): string {
   const upper = ticker.toUpperCase();
@@ -165,10 +192,16 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
     const t = tipoInstrumento.toLowerCase();
     if (t.includes('cedear')) return 'cedear';
     if (t.includes('accion') || t.includes('acción')) return 'accion_ar';
-    if (t.includes('renta fija') || t.includes('bono') || t.includes('soberan') || t.includes('negociable')) return 'bono';
+    if (
+      t.includes('renta fija') || t.includes('bono') || t.includes('soberan') ||
+      t.includes('negociable') || t.includes('letra') || t.includes('lecap') ||
+      t.includes('boncap') || t.includes('boncer') || t.includes('bonar') ||
+      t.includes('bopreal') || t.includes('locap') || t.includes('tesoro')
+    ) return 'bono';
   }
-  const upper = ticker.toUpperCase(); const base = normalizarTicker(upper);
-  if (BONOS_SET.has(upper) || BONOS_SET.has(base)) return 'bono';
+  const upper = ticker.toUpperCase();
+  const base = normalizarTicker(upper);
+  if (isArgentineRentaFija(upper) || isArgentineRentaFija(base)) return 'bono';
   if (AR_STOCKS.has(upper) || AR_STOCKS.has(base)) return 'accion_ar';
   if (upper.endsWith('D') && upper.length > 2 && !NO_NORMALIZAR_D.has(upper)) return 'cedear';
   return 'cedear';
@@ -853,14 +886,35 @@ export default function PortfolioPage() {
     setPosiciones([...posArray]);
     const vMap: Record<string, string> = {}; const hoy = new Date();
     const results = await Promise.all(posArray.map(async (pos, idx) => {
-      const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.tickerBuscar, mepRate);
-      if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
-      const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
-      const valorActualUSD = !esVencido && precioUSD != null ? precioUSD * pos.cantidad : null;
-      const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
-      const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
-      return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacionDiaria: variacion, esVencido };
-    }));
+  // Pre-check: letra argentina con vencimiento codificado en el ticker
+  const letraVenc = getLetraVencimiento(pos.ticker) || getLetraVencimiento(pos.tickerBuscar);
+  if (letraVenc && new Date(letraVenc) < hoy) {
+    // Letra ya vencida — marcar sin llamar a la API
+    vMap[normalizarTicker(pos.ticker)] = letraVenc;
+    return {
+      idx, precioActual: null, moneda: 'ARS' as const,
+      valorActualUSD: null, pnlUSD: null, pnlPct: null,
+      variacionDiaria: null, esVencido: true,
+    };
+  }
+
+  const { precioUSD, precioOriginal, moneda, variacion, vencimiento } = await fetchPrecio(pos.tickerBuscar, mepRate);
+  if (vencimiento) vMap[normalizarTicker(pos.ticker)] = vencimiento;
+  const esVencido = vencimiento ? new Date(vencimiento) < hoy : false;
+
+  // Seguridad extra: si tipo_activo es bono pero precio es absurdo (> costoTotalUSD * 100), descartar precio
+  const precioUSDSeguro = (() => {
+    if (precioUSD == null) return null;
+    const valorEstimado = precioUSD * pos.cantidad;
+    if (pos.costoTotalUSD > 0 && valorEstimado > pos.costoTotalUSD * 200) return null;
+    return precioUSD;
+  })();
+
+  const valorActualUSD = !esVencido && precioUSDSeguro != null ? precioUSDSeguro * pos.cantidad : null;
+  const pnlUSD = valorActualUSD != null ? valorActualUSD - pos.costoTotalUSD : null;
+  const pnlPct = pnlUSD != null && pos.costoTotalUSD > 0 ? (pnlUSD / pos.costoTotalUSD) * 100 : null;
+  return { idx, precioActual: precioOriginal, moneda: moneda as 'ARS' | 'USD', valorActualUSD, pnlUSD, pnlPct, variacionDiaria: variacion, esVencido };
+}));
     setVencimientosMap(vMap);
     const completed = posArray.map((pos, idx) => { const r = results.find(x => x.idx === idx); if (!r) return { ...pos, loadingPrecio: false }; return { ...pos, ...r, loadingPrecio: false }; });
     const activas = completed.filter(p => !p.esVencido);
