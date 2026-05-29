@@ -1054,7 +1054,8 @@ export default function PortfolioPage() {
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
     const posMap = calcularPosicionesBase(ops);
-    const totalInv = ops.filter(o=>o.tipo==='compra').reduce((s,o)=>s+o.monto_usd, 0);
+    const totalInv = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0)
+               - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
     const efectivo = calcularEfectivoUSD(ops);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({ ...pos, costoPromedioUSD: pos.cantidad>0?pos.costoTotalUSD/pos.cantidad:0, precioActual:null, valorActualUSD:null, pnlUSD:null, pnlPct:null, variacionDiaria:null, loadingPrecio:true }));
@@ -1141,7 +1142,7 @@ export default function PortfolioPage() {
         <>
           <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(3, 1fr)',gap:'10px',marginBottom:'10px' }}>
             <MetricaCard label="CAPITAL ACTUAL" value={fmtUSD(valorTotalUSD)} sub={`Hoy ${variacionHoy>=0?'+':''}${fmtUSD(variacionHoy)} (${fmtPct(variacionHoyPct)})`} subColor={colorV(variacionHoyPct)} accent />
-            <MetricaCard label="TOTAL INVERTIDO" value={fmtUSD(totalInvertidoUSD)} sub="Suma de compras" />
+            <MetricaCard label="CAPITAL INICIAL" value={fmtUSD(totalInvertidoUSD)} sub="Depósitos netos" />
             <MetricaCard label="GANANCIA NETA" value={(gananciaNeta>=0?'+':'')+fmtUSD(gananciaNeta)} sub={`${fmtPct(gananciaNetaPct)} retorno`} subColor={colorV(gananciaNeta)} valueColor={colorV(gananciaNeta)} />
           </div>
 
