@@ -300,6 +300,11 @@ function parseIOLTipoMov(tipoMov: string): { tipo: 'compra'|'venta'|'dividendo'|
   return null;
 }
 
+// Normaliza texto quitando tildes para comparaciones
+function normCuenta(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -351,8 +356,8 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'s
       monto_usd = moneda === 'USD' ? montoARS : montoARS / mep;
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
     } else {
-      const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
-      const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
+      const usdRow = rows.find(r => normCuenta(r['Tipo Cuenta'] || '').includes('dolar') && parseIOLMonto(r['Monto']) > 0);
+      const arsRow = rows.find(r => normCuenta(r['Tipo Cuenta'] || '').includes('peso') && parseIOLMonto(r['Monto']) > 0);
       if (usdRow) { moneda = 'USD'; monto_usd = parseIOLMonto(usdRow['Monto']); precio_unitario = parseFloat(String(usdRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(usdRow['Cant. titulos']) || null; fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']); }
       else if (arsRow) { moneda = 'ARS'; monto_usd = parseIOLMonto(arsRow['Monto']) / mep; precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(arsRow['Cant. titulos']) || null; fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']); }
       else { continue; }
