@@ -570,7 +570,7 @@ function ResumenTab({ cauciones, periodos, activos, monedaActiva }: {
     { name: 'Rend. neto', valor: parseFloat(rendimientoNeto.toFixed(2)), color: rendimientoNeto >= 0 ? '#10b981' : '#ef4444' },
   ];
 
-  const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' };
+  const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' };
   const axisProps = { tick: { fill: 'var(--muted2)', fontSize: 10, fontFamily: 'DM Mono, monospace' }, axisLine: false as const, tickLine: false as const };
   const chartH = isMobile ? 180 : 220;
 
@@ -609,7 +609,7 @@ function ResumenTab({ cauciones, periodos, activos, monedaActiva }: {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                 <XAxis dataKey="name" {...axisProps} />
                 <YAxis {...axisProps} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmtM(v, monedaActiva), 'P&L']} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Tooltip contentStyle={tooltipStyle} itemStyle={{ color: 'var(--text)' }} labelStyle={{ color: 'var(--muted2)' }} formatter={(v: number) => [fmtM(v, monedaActiva), 'P&L']} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
                 <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
                 <Bar dataKey="valor" radius={[4, 4, 0, 0]}>
                   {pnlPorActivo.map((e, i) => <Cell key={i} fill={e.valor >= 0 ? '#10b981' : '#ef4444'} />)}
