@@ -9,6 +9,17 @@ const COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec
 type Tab = 'precios' | 'fundamentales' | 'correlacion' | 'graficos' | 'analistas' | 'ia';
 const LS_KEY = 'tcnexus_dashboard_tickers';
 
+const TOOLTIP_STYLE = {
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
+  fontFamily: 'DM Mono, monospace',
+  fontSize: '12px',
+  color: 'var(--text)',
+};
+const TOOLTIP_ITEM_STYLE = { color: 'var(--text)' };
+const TOOLTIP_LABEL_STYLE = { color: 'var(--muted2)' };
+
 interface Hist { fecha: string; cierre: number; }
 interface TickerItem {
   ticker: string; nombre: string | null; tipo: string; moneda: string;
@@ -75,8 +86,8 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo','Precio','Var. Diaria', ...(isMobile ? [] : ['Var. Mensual','Var. Anual','Volatilidad']), ''].map(h => (
-                <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+              {['Activo','Precio','Var. Diaria',...(isMobile?[]:['Var. Mensual','Var. Anual','Volatilidad']),''].map(h => (
+                <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h==='Activo'?'left':'right', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -138,7 +149,6 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
     return hi ? vals.reduce((a,b) => a.val! > b.val! ? a : b).ticker : vals.reduce((a,b) => a.val! < b.val! ? a : b).ticker;
   }
 
-  // En mobile mostramos cards en lugar de tabla
   if (isMobile) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -268,7 +278,6 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
     h.forEach(d => { m[d.fecha] = +((d.cierre-base)/base*100).toFixed(2); });
     return m;
   }
-
   const allDates = Array.from(new Set(withH.flatMap(t => filtrar(t.historico!).map(d => d.fecha)))).sort();
   const step = Math.max(1, Math.floor(allDates.length/200));
   const sampled = allDates.filter((_,i) => i%step===0 || i===allDates.length-1);
@@ -279,7 +288,6 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
     withH.filter(t => activos.has(t.ticker)).forEach(t => { point[t.ticker] = normMaps[t.ticker]?.[fecha] ?? null; });
     return point;
   });
-
   const toggleTicker = (ticker: string) => setActivos(prev => {
     const s = new Set(prev);
     if (s.has(ticker)) { if (s.size > 1) s.delete(ticker); } else s.add(ticker);
@@ -295,7 +303,7 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
         </div>
         <div style={{ display: 'flex', gap: '4px', background: 'var(--surface2)', borderRadius: '8px', padding: '4px' }}>
           {(['7d','30d','3m','ytd','1y'] as const).map(r => (
-            <button key={r} onClick={() => setRango(r)} style={{ background: rango===r?'var(--violet)':'transparent', color: rango===r?'#fff':'var(--muted2)', border: 'none', borderRadius: '6px', padding: isMobile ? '4px 8px' : '4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
+            <button key={r} onClick={() => setRango(r)} style={{ background: rango===r?'var(--violet)':'transparent', color: rango===r?'#fff':'var(--muted2)', border: 'none', borderRadius: '6px', padding: isMobile?'4px 8px':'4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'Syne, sans-serif', fontWeight: 600, transition: 'all 0.15s' }}>
               {r.toUpperCase()}
             </button>
           ))}
@@ -310,16 +318,18 @@ function TabGraficos({ items }: { items: TickerItem[] }) {
           </button>
         ))}
       </div>
-      <ResponsiveContainer width="100%" height={isMobile ? 220 : 320}>
-        <LineChart data={chartData} margin={{ top: 5, right: isMobile ? 5 : 20, bottom: 5, left: 0 }}>
+      <ResponsiveContainer width="100%" height={isMobile?220:320}>
+        <LineChart data={chartData} margin={{ top: 5, right: isMobile?5:20, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
           <XAxis dataKey="fecha" tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
             tickFormatter={v => { const d = new Date(v); return `${d.getDate()}/${d.getMonth()+1}/${String(d.getFullYear()).slice(-2)}`; }}
             interval="preserveStartEnd" />
           <YAxis tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-            tickFormatter={v => `${v>0?'+':''}${v.toFixed(0)}%`} width={isMobile ? 40 : 55} />
+            tickFormatter={v => `${v>0?'+':''}${v.toFixed(0)}%`} width={isMobile?40:55} />
           <Tooltip
-            contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
+            contentStyle={TOOLTIP_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value: number, name: string) => [`${value>0?'+':''}${value?.toFixed(2)}%`, name]}
             labelFormatter={v => new Date(v).toLocaleDateString('es-AR')}
           />
@@ -416,7 +426,7 @@ function TabIA({ items }: { items: TickerItem[] }) {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile?'1fr':'1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
         {[
           { label: 'Riesgo general', value: result.riesgo_general, color: RC[result.riesgo_general] },
           { label: 'Sesgo de mercado', value: result.sesgo_mercado, color: SC[result.sesgo_mercado] },
@@ -428,7 +438,6 @@ function TabIA({ items }: { items: TickerItem[] }) {
           </div>
         ))}
       </div>
-
       <div className="card" style={{ marginBottom: '16px' }}>
         <div className="label-xs" style={{ marginBottom: '10px' }}>📋 Resumen general</div>
         <div style={{ fontSize: '14px', color: 'var(--text2)', lineHeight: '1.7', fontFamily: 'DM Sans, sans-serif' }}>{result.resumen_general}</div>
@@ -439,12 +448,11 @@ function TabIA({ items }: { items: TickerItem[] }) {
           </div>
         )}
       </div>
-
       {result.analisis_empresas?.length > 0 && (
         <div className="card" style={{ marginBottom: '16px' }}>
           <div className="label-xs" style={{ marginBottom: '16px' }}>🏢 Análisis por empresa</div>
           {result.analisis_empresas.map((e: any, i: number) => (
-            <div key={e.ticker} style={{ marginBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', paddingBottom: i < result.analisis_empresas.length-1 ? '16px' : '0', borderBottom: i < result.analisis_empresas.length-1 ? '1px solid var(--border)' : 'none' }}>
+            <div key={e.ticker} style={{ marginBottom: i<result.analisis_empresas.length-1?'16px':'0', paddingBottom: i<result.analisis_empresas.length-1?'16px':'0', borderBottom: i<result.analisis_empresas.length-1?'1px solid var(--border)':'none' }}>
               <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: COLORS[items.findIndex(t => t.ticker === e.ticker) % COLORS.length], marginBottom: '6px' }}>{e.ticker}</div>
               {e.descripcion && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '6px' }}>{e.descripcion}</div>}
               {e.drivers && <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif', marginBottom: '4px' }}><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Drivers: </span>{e.drivers}</div>}
@@ -453,8 +461,7 @@ function TabIA({ items }: { items: TickerItem[] }) {
           ))}
         </div>
       )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile?'1fr':'1fr 1fr', gap: '16px', marginBottom: '16px' }}>
         <div className="card">
           <div className="label-xs" style={{ marginBottom: '12px' }}>💡 Insights clave</div>
           {result.insights?.map((ins: string, i: number) => (
@@ -478,7 +485,6 @@ function TabIA({ items }: { items: TickerItem[] }) {
           ))}
         </div>
       </div>
-
       <button onClick={() => { setResult(null); setError(null); }} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted2)', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <RefreshCw size={13} /> Regenerar análisis
       </button>
@@ -506,9 +512,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const saved = localStorage.getItem(LS_KEY);
-    if (saved) {
-      try { const tickers: string[] = JSON.parse(saved); tickers.forEach(t => addTicker(t, true)); } catch {}
-    }
+    if (saved) { try { const tickers: string[] = JSON.parse(saved); tickers.forEach(t => addTicker(t, true)); } catch {} }
   }, []);
 
   useEffect(() => {
@@ -611,7 +615,7 @@ export default function DashboardPage() {
     <div style={{ maxWidth: '1100px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: isMobile ? '20px' : '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Dashboard</h1>
+          <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: isMobile?'20px':'24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Dashboard</h1>
           <div style={{ fontSize: '12px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace' }}>Análisis comparativo de mercado</div>
         </div>
         {items.length > 0 && (
@@ -622,8 +626,8 @@ export default function DashboardPage() {
       </div>
 
       <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '10px', marginBottom: items.length > 0 ? '16px' : '0', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-          <div style={{ position: 'relative', flex: 1, minWidth: isMobile ? '100%' : '0' }}>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: items.length > 0 ? '16px' : '0', flexWrap: isMobile?'wrap':'nowrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: isMobile?'100%':'0' }}>
             <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
             <input className="input-field" style={{ paddingLeft: '36px' }}
               placeholder="AAPL · NVDA · GD35 · GGAL..."
@@ -660,8 +664,8 @@ export default function DashboardPage() {
           <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'var(--surface2)', borderRadius: '12px', padding: '4px', overflowX: 'auto' }}>
             {TABS.map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab===t.key?'var(--violet)':'transparent', color: tab===t.key?'#fff':'var(--muted2)', border: 'none', borderRadius: '8px', padding: isMobile ? '8px 10px' : '8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: isMobile ? '11px' : '13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
-                <span>{t.icon}</span>{!isMobile && ` ${t.label}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: tab===t.key?'var(--violet)':'transparent', color: tab===t.key?'#fff':'var(--muted2)', border: 'none', borderRadius: '8px', padding: isMobile?'8px 10px':'8px 16px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: isMobile?'11px':'13px', whiteSpace: 'nowrap', transition: 'all 0.15s' }}>
+                <span>{t.icon}</span>{!isMobile&&` ${t.label}`}
               </button>
             ))}
           </div>
