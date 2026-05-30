@@ -103,15 +103,17 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
 }
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
-  const compras = operaciones.filter(o => o.tipo === 'compra');
-  if (!compras.length || valorActualUSD <= 0) return null;
-  const totalCosto = compras.reduce((s, o) => s + o.monto_usd, 0);
-  if (totalCosto <= 0) return null;
-  const sorted = [...compras].sort((a, b) => a.fecha.localeCompare(b.fecha));
-  const primera = new Date(sorted[0].fecha + 'T12:00:00');
-  const anos = (Date.now() - primera.getTime()) / (365.25 * 86400000);
-  if (anos < 0.02) return null;
-  return +(((Math.pow(valorActualUSD / totalCosto, 1 / anos)) - 1) * 100).toFixed(2);
+  const primeras = operaciones.filter(o => ['compra','deposito'].includes(o.tipo)).sort((a,b) => a.fecha.localeCompare(b.fecha));
+  if (!primeras.length) return null;
+  const primeraFecha = new Date(primeras[0].fecha + 'T00:00:00');
+  const hoy = new Date();
+  const años = (hoy.getTime() - primeraFecha.getTime()) / (1000 * 60 * 60 * 24 * 365);
+  if (años < 0.05) return null;
+  const depositos = operaciones.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0);
+  const retiros   = operaciones.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
+  const capitalInicial = depositos - retiros;
+  if (capitalInicial <= 0) return null;
+  return Math.pow(valorActualUSD / capitalInicial, 1 / años) - 1;
 }
 
 function pnlColor(pct: number | null): string {
