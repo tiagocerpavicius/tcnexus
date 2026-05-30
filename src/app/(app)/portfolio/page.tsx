@@ -103,17 +103,17 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
 }
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
+  if (valorActualUSD <= 0) return null;
   const primeras = operaciones.filter(o => ['compra','deposito'].includes(o.tipo)).sort((a,b) => a.fecha.localeCompare(b.fecha));
   if (!primeras.length) return null;
-  const primeraFecha = new Date(primeras[0].fecha + 'T00:00:00');
-  const hoy = new Date();
-  const años = (hoy.getTime() - primeraFecha.getTime()) / (1000 * 60 * 60 * 24 * 365);
-  if (años < 0.05) return null;
+  const primera = new Date(primeras[0].fecha + 'T12:00:00');
+  const anos = (Date.now() - primera.getTime()) / (365.25 * 86400000);
+  if (anos < 0.02) return null;
   const depositos = operaciones.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0);
   const retiros   = operaciones.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
   const capitalInicial = depositos - retiros;
   if (capitalInicial <= 0) return null;
-  return Math.pow(valorActualUSD / capitalInicial, 1 / años) - 1;
+  return +(((Math.pow(valorActualUSD / capitalInicial, 1 / anos)) - 1) * 100).toFixed(2);
 }
 
 function pnlColor(pct: number | null): string {
@@ -765,7 +765,9 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
             valor+=pos.costoTotalUSD*(precioFecha/basePrice);
           }
           valor+=Math.max(0,calcularEfectivoUSD(opsUpTo));
-          const invertido = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+o.monto_usd,0);
+          const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+o.monto_usd,0);
+          const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+o.monto_usd,0);
+          const invertido = Math.max(0, depositos - retiros);
           const rendimiento = invertido>0?+((valor-invertido)/invertido*100).toFixed(2):0;
           return { fecha, valor: Math.round(valor*100)/100, invertido, rendimiento };
         }).filter(p=>p.valor>0);
