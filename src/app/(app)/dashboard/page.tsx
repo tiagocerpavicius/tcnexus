@@ -82,11 +82,11 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
         <div className="label-xs">📈 Precios y Rendimiento</div>
         <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>Variaciones calculadas sobre datos históricos del último año</div>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo','Precio','Var. Diaria',...(isMobile?[]:['Var. Mensual','Var. Anual','Volatilidad']),''].map(h => (
+              {['Activo','Precio','Var. Diaria','Var. Mensual','Var. Anual','Volatilidad',''].map(h => (
                 <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h==='Activo'?'left':'right', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -97,30 +97,28 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
                 style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.15s' }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'rgba(124,58,237,0.06)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <td style={{ padding: '12px 16px' }}>
+                <td style={{ padding: '12px 16px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS[i%COLORS.length], flexShrink: 0 }} />
                     <div>
-                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: 'var(--text)' }}>{t.ticker}</div>
-                      {t.nombre && !isMobile && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{t.nombre}</div>}
+                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '14px', color: 'var(--text)', whiteSpace: 'nowrap' }}>{t.ticker}</div>
+                      {t.nombre && <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}>{t.nombre}</div>}
                     </div>
                   </div>
                 </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text)', fontWeight: 500 }}>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text)', fontWeight: 500, whiteSpace: 'nowrap' }}>
                   {t.loading ? <span style={{ color: 'var(--muted)' }}>...</span> : fmtP(t.precio, t.moneda)}
                 </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.variacion) }}>{t.loading ? '...' : fmtPct(t.variacion)}</td>
-                {!isMobile && <>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varMensual) }}>
-                    {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varMensual)}
-                  </td>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varAnual) }}>
-                    {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varAnual)}
-                  </td>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)' }}>
-                    {t.loadingHistory ? '...' : t.volatilidad != null ? `${t.volatilidad.toFixed(1)}%` : '—'}
-                  </td>
-                </>}
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.variacion), whiteSpace: 'nowrap' }}>{t.loading ? '...' : fmtPct(t.variacion)}</td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varMensual), whiteSpace: 'nowrap' }}>
+                  {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varMensual)}
+                </td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: colorV(t.varAnual), whiteSpace: 'nowrap' }}>
+                  {t.loadingHistory ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : fmtPct(t.varAnual)}
+                </td>
+                <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text2)', whiteSpace: 'nowrap' }}>
+                  {t.loadingHistory ? '...' : t.volatilidad != null ? `${t.volatilidad.toFixed(1)}%` : '—'}
+                </td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}><ChevronRight size={14} color="var(--muted)" /></td>
               </tr>
             ))}
@@ -132,7 +130,6 @@ function TabPrecios({ items, onSelect }: { items: TickerItem[]; onSelect: (t: st
 }
 
 function TabFundamentales({ items }: { items: TickerItem[] }) {
-  const isMobile = useIsMobile();
   const metrics = [
     { key: 'marketCap', label: 'Market Cap',   fmt: fmtM,   hi: true  },
     { key: 'per',       label: 'P/E Ratio',    fmt: fmtNum, hi: false },
@@ -149,40 +146,18 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
     return hi ? vals.reduce((a,b) => a.val! > b.val! ? a : b).ticker : vals.reduce((a,b) => a.val! < b.val! ? a : b).ticker;
   }
 
-  if (isMobile) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {items.map((t, ti) => (
-          <div key={t.ticker} className="card">
-            <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: COLORS[ti%COLORS.length], marginBottom: '12px' }}>{t.ticker}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-              {metrics.map(m => (
-                <div key={m.key} style={{ background: 'var(--surface2)', borderRadius: '8px', padding: '10px' }}>
-                  <div className="label-xs" style={{ marginBottom: '4px' }}>{m.label}</div>
-                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '13px', color: 'var(--text)' }}>
-                    {t.loadingFunds ? '...' : (m.fmt as any)((t as any)[m.key])}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
         <div className="label-xs">📊 Indicadores Fundamentales</div>
         <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>Comparativa de métricas clave · <span style={{ color: 'var(--green)' }}>Verde = mejor del grupo</span></div>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              <th style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'left' }}>Indicador</th>
-              {items.map((t, i) => (<th key={t.ticker} style={{ padding: '10px 16px', color: COLORS[i%COLORS.length], fontWeight: 600, textAlign: 'right' }}>{t.ticker}</th>))}
+              <th style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'left', whiteSpace: 'nowrap', position: 'sticky', left: 0, background: 'var(--surface2)', zIndex: 1 }}>Indicador</th>
+              {items.map((t, i) => (<th key={t.ticker} style={{ padding: '10px 16px', color: COLORS[i%COLORS.length], fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>{t.ticker}</th>))}
             </tr>
           </thead>
           <tbody>
@@ -190,11 +165,11 @@ function TabFundamentales({ items }: { items: TickerItem[] }) {
               const b = best(m.key, m.hi as any);
               return (
                 <tr key={m.key} style={{ borderBottom: '1px solid var(--border)', background: mi%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
-                  <td style={{ padding: '12px 16px', color: 'var(--text2)', fontFamily: 'DM Sans, sans-serif' }}>{m.label}</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--text2)', fontFamily: 'DM Sans, sans-serif', position: 'sticky', left: 0, background: mi%2===0?'var(--surface)':'rgba(255,255,255,0.01)', zIndex: 1, whiteSpace: 'nowrap' }}>{m.label}</td>
                   {items.map(t => {
                     const val = (t as any)[m.key]; const isBest = b === t.ticker;
                     return (
-                      <td key={t.ticker} style={{ padding: '12px 16px', textAlign: 'right', color: isBest?'var(--green)':val==null?'var(--muted)':'var(--text)', fontWeight: isBest?600:400 }}>
+                      <td key={t.ticker} style={{ padding: '12px 16px', textAlign: 'right', color: isBest?'var(--green)':val==null?'var(--muted)':'var(--text)', fontWeight: isBest?600:400, whiteSpace: 'nowrap' }}>
                         {t.loadingFunds ? <span style={{ color: 'var(--muted)', fontSize: '11px' }}>cargando</span> : (m.fmt as any)(val)}
                       </td>
                     );
