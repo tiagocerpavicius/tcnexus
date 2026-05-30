@@ -1270,7 +1270,8 @@ export default function PortfolioPage() {
     const activas = completed.filter(p=>!p.esVencido);
     setPosiciones(activas);
     const totalActivos = activas.reduce((s,p)=>s+(p.valorActualUSD||0), 0);
-    setXirr(calcularCAGR(ops, totalActivos));
+    const efectivoCagr = Math.max(0, calcularEfectivoUSD(ops));
+    setXirr(calcularCAGR(ops, totalActivos + efectivoCagr));
     setRealizadas(calcularGananciasRealizadas(ops, vMap));
   }, []);
 
