@@ -507,7 +507,9 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
           <Pie data={data} cx={65} cy={65} innerRadius={36} outerRadius={62} paddingAngle={2} dataKey="value">
             {data.map((_, i) => <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} stroke="transparent" />)}
           </Pie>
-          <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${(v/total*100).toFixed(1)}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' }} />
+          <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${(v/total*100).toFixed(1)}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}
+itemStyle={{ color: 'var(--text)' }}
+labelStyle={{ color: 'var(--muted2)' }} />
         </PieChart>
         <div style={{ flex: 1, minWidth: '100px' }}>
           {data.slice(0, 8).map((d, i) => (
@@ -1111,7 +1113,9 @@ function TabResumen({ posiciones, efectivoUSD, mep, totalInvertidoUSD, realizada
               <Pie data={distData} cx={70} cy={70} innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value">
                 {distData.map((_, i) => <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} stroke="transparent" />)}
               </Pie>
-              <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${distTotal > 0 ? (v / distTotal * 100).toFixed(1) : 0}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace' }} />
+              <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${distTotal > 0 ? (v / distTotal * 100).toFixed(1) : 0}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}
+itemStyle={{ color: 'var(--text)' }}
+labelStyle={{ color: 'var(--muted2)' }} />
             </PieChart>
             <div style={{ flex: 1, minWidth: '100px' }}>
               {distData.slice(0, 8).map((d, i) => (
