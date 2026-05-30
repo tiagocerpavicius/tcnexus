@@ -521,7 +521,6 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 // ── Tab: Posiciones ───────────────────────────────────────────────────────────
 
 function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number }) {
-  const isMobile = useIsMobile();
   const [verUSD, setVerUSD] = useState(false);
   const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
@@ -534,6 +533,91 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
   const fmtValSign = (usd: number | null) => { const v = conv(usd); if (v == null) return '—'; const str = verUSD ? fmtUSD(Math.abs(v)) : fmtARS(Math.abs(v)); return (usd != null && usd >= 0 ? '+' : '-') + str; };
   const fmtPrecioCol = (p: PosicionCompleta) => { if (p.precioActual == null) return '—'; if (verUSD) return fmtUSD(p.moneda === 'ARS' ? p.precioActual / mep : p.precioActual); return p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtARS(p.precioActual * mep); };
   const fmtCostoCol = (p: PosicionCompleta) => verUSD ? fmtUSD(p.costoPromedioUSD) : fmtARS(p.costoPromedioUSD * mep);
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{posiciones.length} posiciones · MEP ${mep.toLocaleString('es-AR')}</div>
+        <div style={{ display: 'flex', gap: '4px', background: 'var(--surface)', borderRadius: '8px', padding: '3px' }}>
+          <button onClick={() => setVerUSD(false)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: !verUSD ? 'var(--violet)' : 'transparent', color: !verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>ARS</button>
+          <button onClick={() => setVerUSD(true)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: verUSD ? 'var(--violet)' : 'transparent', color: verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>USD</button>
+        </div>
+      </div>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+              {['Activo', 'Precio', 'Cant.', 'Costo Prom.', 'Valor Actual', 'P&L Precio', 'P&L Rentas', 'P&L Total', 'P&L %', 'Var. Hoy', 'Tipo', 'Broker'].map(h => (
+                <th key={h} style={{ padding: '10px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap', fontSize: '11px' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {posiciones.map((p, i) => {
+              const pnlTotal = (p.pnlUSD || 0) + p.pnlRentas;
+              return (
+                <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
+                  <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: i%2===0?'var(--surface)':'var(--surface)', zIndex: 1 }}>
+                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap' }}>{p.ticker}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}>{p.nombre !== p.ticker ? p.nombre : ''}</div>
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>{p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <span style={{ color: 'var(--text)' }}>{fmtPrecioCol(p)}</span>}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{fmtNum(p.cantidad, 4)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{fmtCostoCol(p)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text)', fontWeight: 500, whiteSpace: 'nowrap' }}>{p.loadingPrecio ? '...' : fmtVal(p.valorActualUSD)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500, whiteSpace: 'nowrap' }}>
+                    {p.loadingPrecio ? '...' : p.pnlUSD != null ? fmtValSign(p.pnlUSD) : '—'}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: p.pnlRentas > 0 ? 'var(--green)' : 'var(--muted)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                    {p.pnlRentas > 0 ? '+' + (verUSD ? fmtUSD(p.pnlRentas) : fmtARS(p.pnlRentas * mep)) : '—'}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: colorV(pnlTotal), whiteSpace: 'nowrap' }}>
+                    {p.loadingPrecio ? '...' : fmtValSign(pnlTotal)}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600, whiteSpace: 'nowrap' }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.variacionDiaria), whiteSpace: 'nowrap' }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}><span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span></td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--muted2)', fontSize: '11px', whiteSpace: 'nowrap' }}>{p.broker}</td>
+                </tr>
+              );
+            })}
+            {efectivoUSD > 0 && (
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
+                <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
+                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: '#06b6d4' }}>Liquidez</div>
+                </td>
+                <td colSpan={3} />
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: '#06b6d4', fontWeight: 500, whiteSpace: 'nowrap' }}>{verUSD ? fmtUSD(efectivoUSD) : fmtARS(efectivoUSD*mep)}</td>
+                <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
+                <td colSpan={2} />
+                <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
+                <td />
+              </tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
+              <td style={{ padding: '10px 12px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '13px', position: 'sticky', left: 0, background: 'var(--surface2)', zIndex: 1, whiteSpace: 'nowrap' }}>Total</td>
+              <td colSpan={3} />
+              <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)', fontSize: '13px', whiteSpace: 'nowrap' }}>{verUSD ? fmtUSD(valorTotalUSD) : fmtARS(valorTotalUSD*mep)}</td>
+              <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD), fontSize: '13px', whiteSpace: 'nowrap' }}>
+                {(totalPnlUSD>=0?'+':'')+( verUSD ? fmtUSD(totalPnlUSD) : fmtARS(totalPnlUSD*mep))}
+              </td>
+              <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: totalRentasUSD > 0 ? 'var(--green)' : 'var(--muted)', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                {totalRentasUSD > 0 ? '+'+(verUSD ? fmtUSD(totalRentasUSD) : fmtARS(totalRentasUSD*mep)) : '—'}
+              </td>
+              <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD + totalRentasUSD), fontSize: '13px', whiteSpace: 'nowrap' }}>
+                {(() => { const t = totalPnlUSD + totalRentasUSD; return (t>=0?'+':'')+( verUSD ? fmtUSD(t) : fmtARS(t*mep)); })()}
+              </td>
+              <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlPct), fontSize: '13px', whiteSpace: 'nowrap' }}>{fmtPct(totalPnlPct)}</td>
+              <td colSpan={3} />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -851,7 +935,6 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
 // ── Tab: Operaciones ──────────────────────────────────────────────────────────
 
 function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Operacion[]; onDelete: (id: string) => void; onImport: () => void }) {
-  const isMobile = useIsMobile();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -861,11 +944,11 @@ function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Oper
           <Upload size={13} /> Importar
         </button>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {(['Fecha','Tipo','Ticker',...(isMobile?[]:['Cantidad','Precio Unit.']),'Monto USD',...(isMobile?[]:['Moneda','Broker']),'']).map(h => (
+              {['Fecha','Tipo','Ticker','Cantidad','Precio Unit.','Monto USD','Moneda','Broker',''].map(h => (
                 <th key={h} style={{ padding: '9px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -873,18 +956,16 @@ function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Oper
           <tbody>
             {[...operaciones].reverse().map((op, i) => (
               <tr key={op.id} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
-                <td style={{ padding: '9px 12px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{new Date(op.fecha+'T12:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:isMobile?'2-digit':'short',year:'2-digit'})}</td>
-                <td style={{ padding: '9px 12px' }}><span style={{ color: TIPO_COLORS_OP[op.tipo]||'var(--text)', fontWeight: 600, textTransform: 'capitalize', fontSize: '11px' }}>{op.tipo}</span></td>
-                <td style={{ padding: '9px 12px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '12px' }}>{op.ticker}</td>
-                {!isMobile && <>
-                  <td style={{ padding: '9px 12px', color: 'var(--text2)' }}>{op.cantidad!=null?fmtNum(op.cantidad,4):'—'}</td>
-                  <td style={{ padding: '9px 12px', color: 'var(--text2)' }}>{op.precio_unitario!=null?(op.moneda==='ARS'?fmtARS(op.precio_unitario):fmtUSD(op.precio_unitario)):'—'}</td>
-                </>}
-                <td style={{ padding: '9px 12px', color: 'var(--text)', fontWeight: 500 }}>{op.monto_usd>0?fmtUSD(op.monto_usd):'—'}</td>
-                {!isMobile && <>
-                  <td style={{ padding: '9px 12px', color: 'var(--muted2)' }}>{op.moneda}</td>
-                  <td style={{ padding: '9px 12px', color: 'var(--muted2)' }}>{op.broker||'—'}</td>
-                </>}
+                <td style={{ padding: '9px 12px', color: 'var(--text2)', whiteSpace: 'nowrap', position: 'sticky', left: 0, background: i%2===0?'var(--surface)':'var(--surface)', zIndex: 1 }}>
+                  {new Date(op.fecha+'T12:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'short',year:'2-digit'})}
+                </td>
+                <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}><span style={{ color: TIPO_COLORS_OP[op.tipo]||'var(--text)', fontWeight: 600, textTransform: 'capitalize', fontSize: '11px' }}>{op.tipo}</span></td>
+                <td style={{ padding: '9px 12px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '12px', whiteSpace: 'nowrap' }}>{op.ticker}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{op.cantidad!=null?fmtNum(op.cantidad,4):'—'}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{op.precio_unitario!=null?(op.moneda==='ARS'?fmtARS(op.precio_unitario):fmtUSD(op.precio_unitario)):'—'}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--text)', fontWeight: 500, whiteSpace: 'nowrap' }}>{op.monto_usd>0?fmtUSD(op.monto_usd):'—'}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--muted2)', whiteSpace: 'nowrap' }}>{op.moneda}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--muted2)', whiteSpace: 'nowrap' }}>{op.broker||'—'}</td>
                 <td style={{ padding: '9px 12px' }}>
                   {confirmDelete===op.id?(
                     <div style={{ display:'flex',gap:'4px' }}>
