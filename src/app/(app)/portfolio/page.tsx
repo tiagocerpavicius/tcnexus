@@ -195,7 +195,7 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
   const realizadasMap = new Map<string, GananciaRealizada>();
   const transferCostPerUnit = new Map<string, number>();
 
-  // Mismo orden que calcularPosicionesBase
+  // Mismo orden cronológico que calcularPosicionesBase
   const sorted = [...ops].sort((a, b) => {
     const d = a.fecha.localeCompare(b.fecha);
     if (d !== 0) return d;
@@ -212,8 +212,7 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
     const base = bases.get(key)!;
 
     if (op.tipo === 'compra') {
-      base.costoTotal += op.monto_usd;
-      base.cantidad += (op.cantidad || 0);
+      base.costoTotal += op.monto_usd; base.cantidad += (op.cantidad || 0);
     } else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
@@ -221,24 +220,19 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
       const ganancia = op.monto_usd - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
-      real.montoVentaUSD += op.monto_usd;
-      real.costoRealizadoUSD += costoVendido;
-      real.gananciaUSD += ganancia;
-      real.cantidadVendida += cantVendida;
-      base.costoTotal -= costoVendido;
-      base.cantidad -= cantVendida;
+      real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
+      real.gananciaUSD += ganancia; real.cantidadVendida += cantVendida;
+      base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && base.cantidad > 0) {
       const qty = Math.min(op.cantidad || 0, base.cantidad);
       const costPerUnit = base.cantidad > 0 ? base.costoTotal / base.cantidad : 0;
       transferCostPerUnit.set(key, costPerUnit);
       const pct = qty / base.cantidad;
-      base.costoTotal *= (1 - pct);
-      base.cantidad -= qty;
+      base.costoTotal *= (1 - pct); base.cantidad -= qty;
     } else if (op.tipo === 'traspaso' && op.notas === 'in') {
       const qty = op.cantidad || 0;
       const costPerUnit = transferCostPerUnit.get(key) || 0;
-      base.costoTotal += costPerUnit * qty;
-      base.cantidad += qty;
+      base.costoTotal += costPerUnit * qty; base.cantidad += qty;
     }
   }
 
@@ -507,9 +501,7 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
           <Pie data={data} cx={65} cy={65} innerRadius={36} outerRadius={62} paddingAngle={2} dataKey="value">
             {data.map((_, i) => <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} stroke="transparent" />)}
           </Pie>
-          <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${(v/total*100).toFixed(1)}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}
-itemStyle={{ color: 'var(--text)' }}
-labelStyle={{ color: 'var(--muted2)' }} />
+          <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${(v/total*100).toFixed(1)}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }} itemStyle={{ color: 'var(--text)' }} labelStyle={{ color: 'var(--muted2)' }} />
         </PieChart>
         <div style={{ flex: 1, minWidth: '100px' }}>
           {data.slice(0, 8).map((d, i) => (
@@ -785,7 +777,7 @@ function TabHistorial({ operaciones, mep, valorActualIol }: { operaciones: Opera
   const variacionCapital = primerPuntoReal&&primerPuntoReal.valor>0?((fin.valor-primerPuntoReal.valor)/primerPuntoReal.valor*100):0;
   const primeraCompraFecha = operaciones.filter(o=>o.tipo==='compra').sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]?.fecha;
   const xAxisProps = { dataKey:'fecha', tick:{fill:'var(--muted2)',fontSize:9,fontFamily:'DM Mono, monospace'}, tickFormatter:(v:string)=>{const d=new Date(v+'T00:00:00');return `${d.toLocaleString('es-AR',{month:'short'})} ${d.getFullYear().toString().slice(2)}`;}, interval:'preserveStartEnd' as const };
-  const tooltipStyle = { background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'8px',fontSize:'12px',fontFamily:'DM Mono, monospace' };
+  const tooltipStyle = { background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'8px',fontSize:'12px',fontFamily:'DM Mono, monospace',color:'var(--text)' };
   const labelFmt = (v:string)=>new Date(v+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'short',year:'numeric'});
   const chartH = isMobile ? 200 : 280;
 
@@ -1113,9 +1105,7 @@ function TabResumen({ posiciones, efectivoUSD, mep, totalInvertidoUSD, realizada
               <Pie data={distData} cx={70} cy={70} innerRadius={40} outerRadius={68} paddingAngle={2} dataKey="value">
                 {distData.map((_, i) => <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} stroke="transparent" />)}
               </Pie>
-              <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${distTotal > 0 ? (v / distTotal * 100).toFixed(1) : 0}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }}
-itemStyle={{ color: 'var(--text)' }}
-labelStyle={{ color: 'var(--muted2)' }} />
+              <Tooltip formatter={(v: number) => [`${fmtUSD(v)} (${distTotal > 0 ? (v / distTotal * 100).toFixed(1) : 0}%)`, '']} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', fontFamily: 'DM Mono, monospace', color: 'var(--text)' }} itemStyle={{ color: 'var(--text)' }} labelStyle={{ color: 'var(--muted2)' }} />
             </PieChart>
             <div style={{ flex: 1, minWidth: '100px' }}>
               {distData.slice(0, 8).map((d, i) => (
