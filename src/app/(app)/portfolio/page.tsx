@@ -22,6 +22,7 @@ interface PosicionBase {
 interface PosicionCompleta extends PosicionBase {
   costoPromedioUSD: number; precioActual: number | null; valorActualUSD: number | null;
   pnlUSD: number | null; pnlPct: number | null; variacionDiaria: number | null;
+  pnlRentas: number;
   loadingPrecio: boolean; esVencido?: boolean;
 }
 interface GananciaRealizada {
@@ -526,13 +527,13 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
   const valorTotalUSD = totalActivosUSD + efectivoUSD;
   const totalCostoUSD = posiciones.reduce((s, p) => s + p.costoTotalUSD, 0);
   const totalPnlUSD = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
+  const totalRentasUSD = posiciones.reduce((s, p) => s + p.pnlRentas, 0);
   const totalPnlPct = totalCostoUSD > 0 ? (totalPnlUSD / totalCostoUSD) * 100 : 0;
   const conv = (usd: number | null) => usd == null ? null : verUSD ? usd : usd * mep;
   const fmtVal = (usd: number | null) => { const v = conv(usd); return v == null ? '—' : verUSD ? fmtUSD(v) : fmtARS(v); };
   const fmtValSign = (usd: number | null) => { const v = conv(usd); if (v == null) return '—'; const str = verUSD ? fmtUSD(Math.abs(v)) : fmtARS(Math.abs(v)); return (usd != null && usd >= 0 ? '+' : '-') + str; };
   const fmtPrecioCol = (p: PosicionCompleta) => { if (p.precioActual == null) return '—'; if (verUSD) return fmtUSD(p.moneda === 'ARS' ? p.precioActual / mep : p.precioActual); return p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtARS(p.precioActual * mep); };
   const fmtCostoCol = (p: PosicionCompleta) => verUSD ? fmtUSD(p.costoPromedioUSD) : fmtARS(p.costoPromedioUSD * mep);
-  const monedaLabel = verUSD ? 'USD' : 'ARS';
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -547,33 +548,44 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
         <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {(['Activo', `Precio`, ...(isMobile ? [] : [`Cant.`, `Costo Prom. (${monedaLabel})`, `Valor Actual (${monedaLabel})`, `P&L (${monedaLabel})`]), 'P&L %', 'Var. Hoy', ...(isMobile ? [] : ['Tipo','Broker'])]).map(h => (
+              {['Activo', 'Precio', ...(isMobile ? [] : ['Cant.', 'Costo Prom.', 'Valor Actual', 'P&L Precio', 'P&L Rentas', 'P&L Total']), 'P&L %', 'Var. Hoy', ...(isMobile ? [] : ['Tipo', 'Broker'])].map(h => (
                 <th key={h} style={{ padding: '10px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap', fontSize: '11px' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {posiciones.map((p, i) => (
-              <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
-                <td style={{ padding: '10px 12px' }}>
-                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{p.ticker}</div>
-                  {!isMobile && p.nombre !== p.ticker && <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
-                </td>
-                <td style={{ padding: '10px 12px', textAlign: 'right' }}>{p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div style={{ color: 'var(--text)' }}>{fmtPrecioCol(p)}</div>}</td>
-                {!isMobile && <>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmtCostoCol(p)}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text)', fontWeight: 500 }}>{p.loadingPrecio ? '...' : fmtVal(p.valorActualUSD)}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500 }}>{p.loadingPrecio ? '...' : p.pnlUSD != null ? fmtValSign(p.pnlUSD) : '—'}</td>
-                </>}
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
-                {!isMobile && <>
-                  <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span></td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--muted2)', fontSize: '11px' }}>{p.broker}</td>
-                </>}
-              </tr>
-            ))}
+            {posiciones.map((p, i) => {
+              const pnlTotal = (p.pnlUSD || 0) + p.pnlRentas;
+              return (
+                <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
+                  <td style={{ padding: '10px 12px' }}>
+                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{p.ticker}</div>
+                    {!isMobile && p.nombre !== p.ticker && <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{p.nombre}</div>}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right' }}>{p.loadingPrecio ? <span style={{ color: 'var(--muted)' }}>...</span> : <div style={{ color: 'var(--text)' }}>{fmtPrecioCol(p)}</div>}</td>
+                  {!isMobile && <>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmtNum(p.cantidad, 4)}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmtCostoCol(p)}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--text)', fontWeight: 500 }}>{p.loadingPrecio ? '...' : fmtVal(p.valorActualUSD)}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlUSD), fontWeight: 500 }}>
+                      {p.loadingPrecio ? '...' : p.pnlUSD != null ? fmtValSign(p.pnlUSD) : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: p.pnlRentas > 0 ? 'var(--green)' : 'var(--muted)', fontWeight: 500 }}>
+                      {p.pnlRentas > 0 ? '+' + (verUSD ? fmtUSD(p.pnlRentas) : fmtARS(p.pnlRentas * mep)) : '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: colorV(pnlTotal) }}>
+                      {p.loadingPrecio ? '...' : fmtValSign(pnlTotal)}
+                    </td>
+                  </>}
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.pnlPct), fontWeight: 600 }}>{p.loadingPrecio ? '...' : fmtPct(p.pnlPct)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', color: colorV(p.variacionDiaria) }}>{p.loadingPrecio ? '...' : fmtPct(p.variacionDiaria)}</td>
+                  {!isMobile && <>
+                    <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', whiteSpace: 'nowrap' }}>{TIPO_LABELS[p.tipo_activo] || p.tipo_activo}</span></td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--muted2)', fontSize: '11px' }}>{p.broker}</td>
+                  </>}
+                </tr>
+              );
+            })}
             {efectivoUSD > 0 && (
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
                 <td style={{ padding: '10px 12px' }}><div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: '#06b6d4' }}>Liquidez</div></td>
@@ -583,7 +595,8 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
                 </> : <>
                   <td colSpan={3} />
                   <td style={{ padding: '10px 12px', textAlign: 'right', color: '#06b6d4', fontWeight: 500 }}>{verUSD ? fmtUSD(efectivoUSD) : fmtARS(efectivoUSD*mep)}</td>
-                  <td colSpan={3} style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
+                  <td colSpan={4} style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--muted)' }}>—</td>
+                  <td colSpan={2} />
                   <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
                   <td />
                 </>}
@@ -600,7 +613,15 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
               </> : <>
                 <td colSpan={3} />
                 <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)', fontSize: '13px' }}>{verUSD ? fmtUSD(valorTotalUSD) : fmtARS(valorTotalUSD*mep)}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD), fontSize: '13px' }}>{verUSD ? (totalPnlUSD>=0?'+':'')+fmtUSD(totalPnlUSD) : (totalPnlUSD>=0?'+':'')+fmtARS(totalPnlUSD*mep)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD), fontSize: '13px' }}>
+                  {(totalPnlUSD>=0?'+':'')+( verUSD ? fmtUSD(totalPnlUSD) : fmtARS(totalPnlUSD*mep))}
+                </td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: totalRentasUSD > 0 ? 'var(--green)' : 'var(--muted)', fontSize: '13px' }}>
+                  {totalRentasUSD > 0 ? '+'+(verUSD ? fmtUSD(totalRentasUSD) : fmtARS(totalRentasUSD*mep)) : '—'}
+                </td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlUSD + totalRentasUSD), fontSize: '13px' }}>
+                  {(() => { const t = totalPnlUSD + totalRentasUSD; return (t>=0?'+':'')+( verUSD ? fmtUSD(t) : fmtARS(t*mep)); })()}
+                </td>
                 <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(totalPnlPct), fontSize: '13px' }}>{fmtPct(totalPnlPct)}</td>
                 <td colSpan={3} />
               </>}
@@ -611,6 +632,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
     </div>
   );
 }
+
 
 // ── Tab: Mapa ─────────────────────────────────────────────────────────────────
 
@@ -1229,7 +1251,14 @@ export default function PortfolioPage() {
                    - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
     const efectivo = calcularEfectivoUSD(ops);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
-    const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({ ...pos, costoPromedioUSD: pos.cantidad>0?pos.costoTotalUSD/pos.cantidad:0, precioActual:null, valorActualUSD:null, pnlUSD:null, pnlPct:null, variacionDiaria:null, loadingPrecio:true }));
+    // Rentas/dividendos recibidos por ticker
+    const rentasByTicker = new Map<string, number>();
+    for (const op of ops.filter(o => o.tipo === 'dividendo')) {
+      const key = normalizarTicker(op.ticker);
+      rentasByTicker.set(key, (rentasByTicker.get(key) || 0) + op.monto_usd);
+    }
+
+    const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({ ...pos, costoPromedioUSD: pos.cantidad>0?pos.costoTotalUSD/pos.cantidad:0, precioActual:null, valorActualUSD:null, pnlUSD:null, pnlPct:null, variacionDiaria:null, pnlRentas: rentasByTicker.get(normalizarTicker(pos.ticker)) || 0, loadingPrecio:true }));
     setPosiciones([...posArray]);
     const vMap: Record<string,string> = {}; const hoy = new Date();
     const results = await Promise.all(posArray.map(async (pos, idx) => {
