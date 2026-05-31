@@ -227,12 +227,29 @@ export default function ReportesPage() {
   periodoActual: string
 ) {
   const historicosMap: Record<string, HistoricoInfo> = {};
-  const fechaHasta = new Date().toISOString().split('T')[0];
+  const range = RANGE_MAP[periodoActual] || '1y';
+
+  // Traer histórico del MEP una sola vez para todos los tickers
+  let mepHistorico: { fecha: string; venta: number }[] = [];
+  try {
+    const mepRes = await fetch('/api/historico-mep');
+    const mepData = await mepRes.json();
+    if (Array.isArray(mepData)) {
+      mepHistorico = mepData.map((d: any) => ({ fecha: d.fecha, venta: d.venta }));
+    }
+  } catch {}
+
+  // Función para obtener MEP de una fecha específica
+  const getMepFecha = (fecha: string): number => {
+    const entry = [...mepHistorico]
+      .filter(m => m.fecha <= fecha)
+      .at(-1);
+    return entry?.venta || mepActual;
+  };
 
   await Promise.all(
     posiciones.map(async pos => {
       try {
-        // Bonos y efectivo no tienen histórico útil
         if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
           historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
           return;
@@ -241,24 +258,66 @@ export default function ReportesPage() {
         let hist: { fecha: string; cierre: number }[] = [];
 
         if (pos.tipo === 'cedear') {
-          // CEDEARs: usar IOL con ticker D para precio exacto en USD
-          const res = await fetch(
-            `/api/historico-iol?ticker=${pos.tickerBuscar}&fechaDesde=${fechaInicio}&fechaHasta=${fechaHasta}`
-          );
-          const data = await res.json();
-          if (data.historico?.length) {
-            hist = data.historico;
+          // Intento 1: CEDEAR en ARS con suffix .BA → convertir a USD con MEP histórico
+          try {
+            // Ticker sin D para ARS en Yahoo .BA
+            const tickerARS = pos.ticker; // sin D
+            const res = await fetch(
+              `/api/historico?ticker=${tickerARS}&suffix=.BA&range=${range}&interval=1d`
+            );
+            const data = await res.json();
+            if (data.historico?.length > 1) {
+              // Convertir cada precio ARS a USD usando MEP de esa fecha
+              hist = data.historico.map((h: any) => ({
+                fecha: h.fecha,
+                cierre: mepHistorico.length > 0
+                  ? h.cierre / getMepFecha(h.fecha)
+                  : h.cierre / mepActual,
+              }));
+            }
+          } catch {}
+
+          // Intento 2: fallback con ticker+D suffix .BA (precio ya en USD)
+          if (!hist.length) {
+            try {
+              const res = await fetch(
+                `/api/historico?ticker=${pos.tickerBuscar}&suffix=.BA&range=${range}&interval=1d`
+              );
+              const data = await res.json();
+              if (data.historico?.length > 1) {
+                hist = data.historico;
+              }
+            } catch {}
+          }
+
+          // Intento 3: fallback Yahoo US sin suffix
+          if (!hist.length) {
+            try {
+              const res = await fetch(
+                `/api/historico?ticker=${pos.ticker}&suffix=&range=${range}&interval=1d`
+              );
+              const data = await res.json();
+              if (data.historico?.length > 1) {
+                hist = data.historico;
+              }
+            } catch {}
           }
         } else if (pos.tipo === 'accion_ar') {
-          // Acciones AR: Yahoo con suffix .BA
-          const range = RANGE_MAP[periodoActual] || '1y';
-          const res = await fetch(
-            `/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`
-          );
-          const data = await res.json();
-          if (data.historico?.length) {
-            hist = data.historico;
-          }
+          // Acciones AR: Yahoo con suffix .BA en ARS → convertir a USD
+          try {
+            const res = await fetch(
+              `/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`
+            );
+            const data = await res.json();
+            if (data.historico?.length > 1) {
+              hist = data.historico.map((h: any) => ({
+                fecha: h.fecha,
+                cierre: mepHistorico.length > 0
+                  ? h.cierre / getMepFecha(h.fecha)
+                  : h.cierre / mepActual,
+              }));
+            }
+          } catch {}
         }
 
         if (!hist.length) {
@@ -273,8 +332,7 @@ export default function ReportesPage() {
         const precioInicio = precioInicioEntry?.cierre ?? null;
 
         // Precio actual — último dato
-        const precioActualEntry = hist.at(-1);
-        const precioActualHist = precioActualEntry?.cierre ?? null;
+        const precioActualHist = hist.at(-1)?.cierre ?? null;
 
         const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
           ? ((precioActualHist - precioInicio) / precioInicio) * 100
