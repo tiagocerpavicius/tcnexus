@@ -353,9 +353,26 @@ export default function ReportesPage() {
         // Precio actual — último dato
         const precioActualHist = hist.at(-1)?.cierre ?? null;
 
-        const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
-          ? ((precioActualHist - precioInicio) / precioInicio) * 100
-          : null;
+        const retornoPeriodo = (() => {
+  if (!reporte || Object.keys(historicos).length === 0) return null;
+
+  let valorInicio = 0;
+  let valorActual = 0;
+  let posicionesConDatos = 0;
+
+  reporte.performancePorActivo.forEach(pos => {
+    const hist = historicos[pos.ticker];
+    const precioActual = precios[pos.ticker]?.precio ?? null;
+    if (hist?.precioInicio && precioActual) {
+      valorInicio += hist.precioInicio * pos.cantidad;
+      valorActual += precioActual * pos.cantidad;
+      posicionesConDatos++;
+    }
+  });
+
+  if (posicionesConDatos === 0 || valorInicio === 0) return null;
+  return ((valorActual - valorInicio) / valorInicio) * 100;
+})();
 
         historicosMap[pos.ticker] = {
           precioInicio,
