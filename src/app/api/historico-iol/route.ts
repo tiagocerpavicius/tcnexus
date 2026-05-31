@@ -18,6 +18,11 @@ async function getToken(): Promise<string | null> {
   } catch { return null; }
 }
 
+function toIOLDate(fecha: string): string {
+  const [y, m, d] = fecha.split('-');
+  return `${d}/${m}/${y}`;
+}
+
 export async function GET(request: NextRequest) {
   const ticker = request.nextUrl.searchParams.get('ticker')?.toUpperCase().trim();
   const fechaDesde = request.nextUrl.searchParams.get('fechaDesde');
@@ -31,17 +36,22 @@ export async function GET(request: NextRequest) {
     const token = await getToken();
     if (!token) return NextResponse.json({ error: 'No se pudo obtener token IOL' }, { status: 401 });
 
-    const res = await fetch(
-      `${IOL_API}/bCBA/Titulos/${ticker}/Cotizacion/seriehistorica/${fechaDesde}/${fechaHasta}/ajustada`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const url = `${IOL_API}/bCBA/Titulos/${ticker}/Cotizacion/seriehistorica/${toIOLDate(fechaDesde)}/${toIOLDate(fechaHasta)}/ajustada`;
+    
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-    if (!res.ok) return NextResponse.json({ error: 'Error IOL' }, { status: res.status });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('IOL historico error:', res.status, errText);
+      return NextResponse.json({ error: 'Error IOL', status: res.status }, { status: res.status });
+    }
 
     const data = await res.json();
 
-    // Normalizar respuesta al mismo formato que /api/historico
-    const historico = (data || [])
+    // Normalizar respuesta
+    const historico = (Array.isArray(data) ? data : [])
       .map((item: any) => ({
         fecha: item.fechaHora?.split('T')[0] || '',
         cierre: item.ultimoPrecio ?? item.precioAjustado ?? null,
