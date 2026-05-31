@@ -221,54 +221,77 @@ export default function ReportesPage() {
   }
 
   async function cargarHistoricos(
-    posiciones: PosicionActivo[],
-    fechaInicio: string,
-    mepActual: number,
-    periodoActual: string
-  ) {
-    const range = RANGE_MAP[periodoActual] || '1y';
-    const historicosMap: Record<string, HistoricoInfo> = {};
+  posiciones: PosicionActivo[],
+  fechaInicio: string,
+  mepActual: number,
+  periodoActual: string
+) {
+  const historicosMap: Record<string, HistoricoInfo> = {};
+  const fechaHasta = new Date().toISOString().split('T')[0];
 
-    await Promise.all(
-      posiciones.map(async pos => {
-        try {
+  await Promise.all(
+    posiciones.map(async pos => {
+      try {
+        // Bonos y efectivo no tienen histórico útil
+        if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+          return;
+        }
+
+        let hist: { fecha: string; cierre: number }[] = [];
+
+        if (pos.tipo === 'cedear') {
+          // CEDEARs: usar IOL con ticker D para precio exacto en USD
           const res = await fetch(
-            `/api/historico?ticker=${pos.tickerBuscar}&suffix=&range=${range}&interval=1d`
+            `/api/historico-iol?ticker=${pos.tickerBuscar}&fechaDesde=${fechaInicio}&fechaHasta=${fechaHasta}`
           );
           const data = await res.json();
-          if (!data.historico?.length) {
-            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
-            return;
+          if (data.historico?.length) {
+            hist = data.historico;
           }
-
-          const hist: { fecha: string; cierre: number }[] = data.historico;
-
-          // Precio al inicio del período — el más cercano anterior a fechaInicio
-          const precioInicioEntry = [...hist]
-            .filter(h => h.fecha <= fechaInicio)
-            .at(-1) || hist[0];
-          const precioInicio = precioInicioEntry?.cierre ?? null;
-
-          // Precio actual — último dato
-          const precioActualEntry = hist.at(-1);
-          const precioActualHist = precioActualEntry?.cierre ?? null;
-
-          const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
-            ? ((precioActualHist - precioInicio) / precioInicio) * 100
-            : null;
-
-          historicosMap[pos.ticker] = {
-            precioInicio,
-            precioActual: precioActualHist,
-            retornoPeriodo,
-          };
-        } catch {
-          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+        } else if (pos.tipo === 'accion_ar') {
+          // Acciones AR: Yahoo con suffix .BA
+          const range = RANGE_MAP[periodoActual] || '1y';
+          const res = await fetch(
+            `/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`
+          );
+          const data = await res.json();
+          if (data.historico?.length) {
+            hist = data.historico;
+          }
         }
-      })
-    );
-    setHistoricos(historicosMap);
-  }
+
+        if (!hist.length) {
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+          return;
+        }
+
+        // Precio al inicio del período
+        const precioInicioEntry = [...hist]
+          .filter(h => h.fecha <= fechaInicio)
+          .at(-1) || hist[0];
+        const precioInicio = precioInicioEntry?.cierre ?? null;
+
+        // Precio actual — último dato
+        const precioActualEntry = hist.at(-1);
+        const precioActualHist = precioActualEntry?.cierre ?? null;
+
+        const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
+          ? ((precioActualHist - precioInicio) / precioInicio) * 100
+          : null;
+
+        historicosMap[pos.ticker] = {
+          precioInicio,
+          precioActual: precioActualHist,
+          retornoPeriodo,
+        };
+      } catch {
+        historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+      }
+    })
+  );
+  setHistoricos(historicosMap);
+}
 
   async function generarIA() {
     if (!reporte) return;
