@@ -190,14 +190,24 @@ export default function ReportesPage() {
   }
 
   async function cargarPrecios(posiciones: PosicionActivo[], mepActual: number) {
-    const preciosMap: Record<string, PrecioInfo> = {};
-    await Promise.all(
-      posiciones.map(async pos => {
-        try {
-          const res = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
-          const data = await res.json();
-          let precio: number | null = null;
-          let moneda = 'USD';
+  const preciosMap: Record<string, PrecioInfo> = {};
+  await Promise.all(
+    posiciones.map(async pos => {
+      try {
+        // Intento 1: ticker con D (precio USD directo)
+        let res = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
+        let data = await res.json();
+
+        // Intento 2: si falla, usar ticker sin D en ARS y dividir por MEP
+        if (data.error) {
+          res = await fetch(`/api/buscar?ticker=${pos.ticker}`);
+          data = await res.json();
+        }
+
+        let precio: number | null = null;
+        let moneda = 'USD';
+
+        if (!data.error) {
           if (data.tipo === 'cedear') {
             precio = data.precio?.valor ?? null;
             moneda = data.precio?.moneda || 'ARS';
@@ -208,17 +218,20 @@ export default function ReportesPage() {
             precio = data.precio?.valor ?? null;
             moneda = data.monedaLabel || 'USD';
           }
-          const precioUSD = precio != null
-            ? (moneda === 'ARS' ? precio / mepActual : precio)
-            : null;
-          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
-        } catch {
-          preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
         }
-      })
-    );
-    setPrecios(preciosMap);
-  }
+
+        const precioUSD = precio != null
+          ? (moneda === 'ARS' ? precio / mepActual : precio)
+          : null;
+
+        preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+      } catch {
+        preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
+      }
+    })
+  );
+  setPrecios(preciosMap);
+}
 
   async function cargarHistoricos(
   posiciones: PosicionActivo[],
