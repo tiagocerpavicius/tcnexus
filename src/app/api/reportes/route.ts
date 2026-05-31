@@ -17,12 +17,6 @@ function calcularVolatilidad(h: { fecha: string; cierre: number }[]): number | n
   return +(Math.sqrt(r.reduce((a, v) => a + (v - mean) ** 2, 0) / r.length) * Math.sqrt(252) * 100).toFixed(2);
 }
 
-function calcularSharpe(retornoPct: number, volatilidad: number | null): number | null {
-  if (!volatilidad || volatilidad === 0) return null;
-  const rf = 4.5; // Risk-free rate aproximado
-  return +((retornoPct - rf) / volatilidad).toFixed(2);
-}
-
 function calcularMaxDrawdown(capitalPorFecha: { fecha: string; valor: number }[]): number {
   if (capitalPorFecha.length < 2) return 0;
   let maxDD = 0;
@@ -46,10 +40,31 @@ function getFechaInicio(periodo: string, fechaCustomInicio?: string): string {
   return hoy.toISOString().split('T')[0];
 }
 
+// Normaliza ticker para buscar precio: agrega D si es cedear ARS
+function tickerParaBuscar(ticker: string, tipoActivo: string): string {
+  const upper = ticker.toUpperCase();
+  // Si ya termina en D no tocar
+  if (upper.endsWith('D')) return upper;
+  // Bonos y acciones AR no llevan D
+  if (tipoActivo === 'bono' || tipoActivo === 'accion_ar' || tipoActivo === 'efectivo') return upper;
+  // CEDEARs → agregar D para traer precio en USD de IOL
+  if (tipoActivo === 'cedear') return upper + 'D';
+  return upper;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { user_id, periodo, fechaCustomInicio, fechaCustomFin } = await request.json();
     if (!user_id) return NextResponse.json({ error: 'user_id requerido' }, { status: 400 });
+
+    // Traer MEP actual
+    let mep = 1430;
+    try {
+      const dolarRes = await fetch('https://dolarapi.com/v1/dolares');
+      const dolarData = await dolarRes.json();
+      const bolsa = dolarData.find((d: any) => d.casa === 'bolsa');
+      if (bolsa?.venta) mep = bolsa.venta;
+    } catch {}
 
     const fechaInicio = getFechaInicio(periodo, fechaCustomInicio);
     const fechaFin = fechaCustomFin || new Date().toISOString().split('T')[0];
@@ -76,93 +91,103 @@ export async function POST(request: NextRequest) {
       .select('*')
       .eq('user_id', user_id);
 
-    // 3. Calcular capital inicial (depósitos netos históricos)
+    // 3. Capital inicial (depósitos netos históricos)
     const depositos = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const capitalInicial = depositos - retiros;
 
-    // 4. Calcular depósitos/retiros dentro del período
+    // 4. Ops dentro del período
     const opsPeriodo = ops.filter(o => o.fecha >= fechaInicio && o.fecha <= fechaFin);
     const depositosPeriodo = opsPeriodo.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const retirosPeriodo = opsPeriodo.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
 
-    // 5. Calcular posiciones abiertas al cierre del período
-    const posiciones = new Map<string, { cantidad: number; costoTotal: number; tipo: string; broker: string }>();
-    for (const op of ops) {
-      const t = op.ticker;
+    // 5. Calcular posiciones abiertas — single pass cronológico
+    const transferCostPerUnit = new Map<string, number>();
+    const posiciones = new Map<string, {
+      cantidad: number; costoTotal: number; tipo: string; broker: string; moneda: string;
+    }>();
+
+    const sorted = [...ops].sort((a, b) => {
+      const d = a.fecha.localeCompare(b.fecha);
+      if (d !== 0) return d;
+      if (a.tipo === 'traspaso' && b.tipo === 'traspaso') {
+        if (a.notas === 'out' && b.notas === 'in') return -1;
+        if (a.notas === 'in' && b.notas === 'out') return 1;
+      }
+      return 0;
+    });
+
+    for (const op of sorted) {
+      const t = op.ticker?.toUpperCase();
       if (!t || op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'dividendo') continue;
-      if (!posiciones.has(t)) posiciones.set(t, { cantidad: 0, costoTotal: 0, tipo: op.tipo_activo || 'renta_variable', broker: op.broker || '' });
-      const pos = posiciones.get(t)!;
-      if (op.tipo === 'compra' || (op.tipo === 'traspaso' && op.notas === 'in')) {
+      // Normalizar ticker (quitar D al final para la key)
+      const key = t.endsWith('D') && t.length > 2 ? t.slice(0, -1) : t;
+
+      if (!posiciones.has(key)) {
+        posiciones.set(key, {
+          cantidad: 0, costoTotal: 0,
+          tipo: op.tipo_activo || 'cedear',
+          broker: op.broker || '',
+          moneda: op.moneda || 'ARS',
+        });
+      }
+      const pos = posiciones.get(key)!;
+
+      if (op.tipo === 'compra') {
         pos.cantidad += op.cantidad || 0;
         pos.costoTotal += op.monto_usd || 0;
-      } else if (op.tipo === 'venta' || (op.tipo === 'traspaso' && op.notas === 'out')) {
-        const costoUnit = pos.cantidad > 0 ? pos.costoTotal / pos.cantidad : 0;
+        pos.broker = op.broker || pos.broker;
+      } else if (op.tipo === 'venta' && pos.cantidad > 0) {
+        const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
+        pos.costoTotal *= (1 - pct);
         pos.cantidad -= op.cantidad || 0;
-        pos.costoTotal -= costoUnit * (op.cantidad || 0);
         if (pos.cantidad <= 0) { pos.cantidad = 0; pos.costoTotal = 0; }
+      } else if (op.tipo === 'traspaso' && op.notas === 'out' && pos.cantidad > 0) {
+        const qty = Math.min(op.cantidad || 0, pos.cantidad);
+        const costPerUnit = pos.cantidad > 0 ? pos.costoTotal / pos.cantidad : 0;
+        transferCostPerUnit.set(key, costPerUnit);
+        const pct = qty / pos.cantidad;
+        pos.costoTotal *= (1 - pct);
+        pos.cantidad -= qty;
+        if (pos.cantidad <= 0) { pos.cantidad = 0; pos.costoTotal = 0; }
+      } else if (op.tipo === 'traspaso' && op.notas === 'in') {
+        const qty = op.cantidad || 0;
+        const costPerUnit = transferCostPerUnit.get(key) || 0;
+        pos.cantidad += qty;
+        pos.costoTotal += costPerUnit * qty;
+        pos.broker = op.broker || pos.broker;
       }
     }
 
-    // 6. Tickers con posición abierta
+    // 6. Tickers abiertos
     const tickersAbiertos = Array.from(posiciones.entries())
-      .filter(([, v]) => v.cantidad > 0)
-      .map(([ticker]) => ticker);
+      .filter(([, v]) => v.cantidad > 0.0001)
+      .map(([ticker, pos]) => ({
+        ticker,
+        tickerBuscar: tickerParaBuscar(ticker, pos.tipo),
+      }));
 
-    // 7. Dividendos del período
+    // 7. Dividendos del período y por ticker
     const dividendosPeriodo = opsPeriodo
       .filter(o => o.tipo === 'dividendo')
       .reduce((s, o) => s + (o.monto_usd || 0), 0);
 
-    // 8. Dividendos por ticker
     const dividendosPorTicker: Record<string, number> = {};
     ops.filter(o => o.tipo === 'dividendo').forEach(o => {
-      if (o.ticker) dividendosPorTicker[o.ticker] = (dividendosPorTicker[o.ticker] || 0) + (o.monto_usd || 0);
+      if (o.ticker) {
+        const key = o.ticker.toUpperCase().endsWith('D')
+          ? o.ticker.toUpperCase().slice(0, -1)
+          : o.ticker.toUpperCase();
+        dividendosPorTicker[key] = (dividendosPorTicker[key] || 0) + (o.monto_usd || 0);
+      }
     });
 
-    // 9. P&L realizado del período (ventas)
-    const ventasPeriodo = opsPeriodo.filter(o => o.tipo === 'venta');
-    let plRealizado = 0;
-    for (const venta of ventasPeriodo) {
-      const pos = posiciones.get(venta.ticker);
-      if (pos && pos.cantidad > 0) {
-        const costoUnit = pos.costoTotal / pos.cantidad;
-        plRealizado += (venta.monto_usd || 0) - costoUnit * (venta.cantidad || 0);
-      }
-    }
-
-    // 10. Cauciones — métricas del período
-    const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
-    const capitalCaucionado = (cauciones || []).reduce((s, c) => s + (c.monto || 0), 0);
-    const tnasValidas = (cauciones || []).filter(c => c.tna).map(c => c.tna);
-    const tnaPromedio = tnasValidas.length ? tnasValidas.reduce((a, b) => a + b, 0) / tnasValidas.length : null;
-
-    // 11. Historial de capital por fecha (usando ops acumuladas)
-    const fechasUnicas = Array.from(new Set(ops.map(o => o.fecha))).sort();
-    let acumDepositos = 0;
-    const historialCapital: { fecha: string; valor: number }[] = [];
-    for (const fecha of fechasUnicas) {
-      if (fecha < fechaInicio || fecha > fechaFin) continue;
-      const opsDia = ops.filter(o => o.fecha === fecha);
-      acumDepositos += opsDia.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
-      acumDepositos -= opsDia.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
-      historialCapital.push({ fecha, valor: acumDepositos });
-    }
-
-    // 12. Retornos mensuales (últimos 12 meses)
-    const retornosMensuales: { mes: string; retorno: number | null }[] = [];
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
-      const mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      retornosMensuales.push({ mes, retorno: null }); // se completará con precios reales en el frontend
-    }
-
-    // 13. Performance por activo (P&L precio + rentas)
+    // 8. Performance por activo
     const performancePorActivo = Array.from(posiciones.entries())
-      .filter(([, v]) => v.cantidad > 0)
+      .filter(([, v]) => v.cantidad > 0.0001)
       .map(([ticker, pos]) => ({
         ticker,
+        tickerBuscar: tickerParaBuscar(ticker, pos.tipo),
         cantidad: pos.cantidad,
         costoTotal: pos.costoTotal,
         costoPromedio: pos.cantidad > 0 ? pos.costoTotal / pos.cantidad : 0,
@@ -171,38 +196,49 @@ export async function POST(request: NextRequest) {
         broker: pos.broker,
       }));
 
-    // 14. Exposición sectorial — los tickers se enriquecen en el frontend con /api/ticker-sector
-    const exposicionSectorial: Record<string, number> = {};
+    // 9. Cauciones métricas
+    const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
+    const capitalCaucionado = (cauciones || []).reduce((s, c) => s + (c.monto || 0), 0);
+    const tnasValidas = (cauciones || []).filter((c: any) => c.tna).map((c: any) => c.tna);
+    const tnaPromedio = tnasValidas.length
+      ? tnasValidas.reduce((a: number, b: number) => a + b, 0) / tnasValidas.length
+      : null;
 
-    // 15. Métricas de riesgo básicas
-    const volatilidad = calcularVolatilidad(historialCapital.map(h => ({ fecha: h.fecha, cierre: h.valor })));
+    // 10. Historial de capital por fecha
+    let acumDepositos = 0;
+    const historialCapital: { fecha: string; valor: number }[] = [];
+    const fechasUnicas = Array.from(new Set(ops.map(o => o.fecha))).sort();
+    for (const fecha of fechasUnicas) {
+      if (fecha < fechaInicio || fecha > fechaFin) continue;
+      const opsDia = ops.filter(o => o.fecha === fecha);
+      acumDepositos += opsDia.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
+      acumDepositos -= opsDia.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
+      if (acumDepositos > 0) historialCapital.push({ fecha, valor: acumDepositos });
+    }
+
+    // 11. Métricas de riesgo
+    const volatilidad = calcularVolatilidad(
+      historialCapital.map(h => ({ fecha: h.fecha, cierre: h.valor }))
+    );
     const maxDrawdown = calcularMaxDrawdown(historialCapital);
 
     return NextResponse.json({
       periodo,
       fechaInicio,
       fechaFin,
-      // Capital
+      mep,
       capitalInicial,
       depositosPeriodo,
       retirosPeriodo,
       dividendosPeriodo,
-      plRealizado,
-      // Cauciones
       capitalCaucionado,
       interesesCauciones,
       tnaPromedio,
-      // Posiciones
-      tickersAbiertos,
+      tickersAbiertos: tickersAbiertos.map(t => t.tickerBuscar),
       performancePorActivo,
-      exposicionSectorial,
-      // Historial
       historialCapital,
-      retornosMensuales,
-      // Riesgo
       volatilidad,
       maxDrawdown,
-      // Meta
       totalOps: ops.length,
       opsPeriodoCount: opsPeriodo.length,
     });
