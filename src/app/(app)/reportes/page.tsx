@@ -46,6 +46,7 @@ const SECTOR_COLORS: Record<string, string> = {
   'Real Estate':    '#a3e635',
   'Renta Fija':     '#94a3b8',
   'Cripto':         '#f43f5e',
+  'ETF Diversif.':  '#38bdf8',
   'Otros':          '#475569',
 };
 
@@ -79,11 +80,18 @@ interface ReporteData {
   maxDrawdown: number;
   totalOps: number;
   opsPeriodoCount: number;
+  efectivoUSD: number;
 }
 
 interface PrecioInfo {
   precio: number | null;
   moneda: string;
+}
+
+interface HistoricoInfo {
+  precioInicio: number | null;
+  precioActual: number | null;
+  retornoPeriodo: number | null;
 }
 
 interface IAData {
@@ -106,6 +114,7 @@ export default function ReportesPage() {
   const [reporte, setReporte] = useState<ReporteData | null>(null);
   const [sectores, setSectores] = useState<Record<string, { sector: string; industria: string; pais: string }>>({});
   const [precios, setPrecios] = useState<Record<string, PrecioInfo>>({});
+  const [historicos, setHistoricos] = useState<Record<string, HistoricoInfo>>({});
   const [iaData, setIAData] = useState<IAData | null>(null);
   const [iaLoading, setIALoading] = useState(false);
   const [iaError, setIAError] = useState<string | null>(null);
@@ -131,6 +140,7 @@ export default function ReportesPage() {
     setIAData(null);
     setSectores({});
     setPrecios({});
+    setHistoricos({});
     try {
       const res = await fetch('/api/reportes', {
         method: 'POST',
@@ -146,13 +156,11 @@ export default function ReportesPage() {
       if (data.error) throw new Error(data.error);
       setReporte(data);
 
-      // Cargar sectores y precios usando tickerBuscar (con D para CEDEARs)
-      const tickersBuscar = data.performancePorActivo.map((p: PosicionActivo) => p.tickerBuscar);
       const tickersBase = data.performancePorActivo.map((p: PosicionActivo) => p.ticker);
-
-      if (tickersBuscar.length) {
-        cargarSectores(tickersBase); // sectores usan ticker base sin D
+      if (tickersBase.length) {
+        cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
+        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -177,12 +185,10 @@ export default function ReportesPage() {
     await Promise.all(
       posiciones.map(async pos => {
         try {
-          // Usar tickerBuscar (con D para CEDEARs) para traer precio en USD directamente
           const res = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
           const data = await res.json();
           let precio: number | null = null;
           let moneda = 'USD';
-
           if (data.tipo === 'cedear') {
             precio = data.precio?.valor ?? null;
             moneda = data.precio?.moneda || 'ARS';
@@ -193,13 +199,9 @@ export default function ReportesPage() {
             precio = data.precio?.valor ?? null;
             moneda = data.monedaLabel || 'USD';
           }
-
-          // Convertir a USD si viene en ARS
           const precioUSD = precio != null
             ? (moneda === 'ARS' ? precio / mepActual : precio)
             : null;
-
-          // Guardar con key = ticker base (sin D)
           preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
         } catch {
           preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
@@ -209,19 +211,65 @@ export default function ReportesPage() {
     setPrecios(preciosMap);
   }
 
+  async function cargarHistoricos(posiciones: PosicionActivo[], fechaInicio: string, mepActual: number) {
+    const historicosMap: Record<string, HistoricoInfo> = {};
+    await Promise.all(
+      posiciones.map(async pos => {
+        try {
+          // Usar tickerBuscar (con D) para Yahoo — mismo que precios
+          const res = await fetch(
+            `/api/historico?ticker=${pos.tickerBuscar}&suffix=&range=1y&interval=1d`
+          );
+          const data = await res.json();
+          if (!data.historico?.length) {
+            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+            return;
+          }
+
+          const hist: { fecha: string; cierre: number }[] = data.historico;
+
+          // Precio al inicio del período — buscar el más cercano anterior a fechaInicio
+          const precioInicioEntry = [...hist]
+            .filter(h => h.fecha <= fechaInicio)
+            .at(-1) || hist[0];
+          const precioInicio = precioInicioEntry?.cierre ?? null;
+
+          // Precio actual — último dato del histórico
+          const precioActualEntry = hist.at(-1);
+          const precioActualHist = precioActualEntry?.cierre ?? null;
+
+          // Convertir a USD si es necesario (CEDEARs con D ya vienen en USD de Yahoo)
+          // El histórico de Yahoo para ASMLD viene en USD directamente
+          const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
+            ? ((precioActualHist - precioInicio) / precioInicio) * 100
+            : null;
+
+          historicosMap[pos.ticker] = {
+            precioInicio,
+            precioActual: precioActualHist,
+            retornoPeriodo,
+          };
+        } catch {
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+        }
+      })
+    );
+    setHistoricos(historicosMap);
+  }
+
   async function generarIA() {
     if (!reporte) return;
     setIALoading(true);
     setIAError(null);
     try {
       const mep = reporte.mep || 1430;
+      const efectivo = reporte.efectivoUSD || 0;
 
       const capitalActivo = reporte.performancePorActivo.reduce((sum, pos) => {
-        const precioInfo = precios[pos.ticker];
-        const precioUSD = precioInfo?.precio ?? null;
+        const precioUSD = precios[pos.ticker]?.precio ?? null;
         return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
       }, 0);
-      const capitalActual = capitalActivo + reporte.interesesCauciones;
+      const capitalActual = capitalActivo + reporte.interesesCauciones + efectivo;
       const retornoPeriodo = reporte.capitalInicial > 0
         ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
         : null;
@@ -229,7 +277,6 @@ export default function ReportesPage() {
         ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
         : null;
 
-      // Exposición sectorial
       const expSectorial: Record<string, number> = {};
       reporte.performancePorActivo.forEach(pos => {
         const s = sectores[pos.ticker]?.sector || 'Otros';
@@ -273,12 +320,10 @@ export default function ReportesPage() {
     setIALoading(false);
   }
 
-  function descargarPDF() {
-    window.print();
-  }
+  function descargarPDF() { window.print(); }
 
-  // Métricas derivadas
   const mep = reporte?.mep || 1430;
+  const efectivo = reporte?.efectivoUSD || 0;
 
   const capitalActivo = reporte
     ? reporte.performancePorActivo.reduce((sum, pos) => {
@@ -287,7 +332,7 @@ export default function ReportesPage() {
       }, 0)
     : 0;
 
-  const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0);
+  const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0) + efectivo;
 
   const retornoPeriodo = reporte && reporte.capitalInicial > 0
     ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
@@ -315,18 +360,20 @@ export default function ReportesPage() {
     }))
     .sort((a, b) => b.valor - a.valor);
 
-  // Performance por activo con P&L en USD
+  // Performance con rendimiento del período desde históricos
   const perfData = reporte
     ? reporte.performancePorActivo.map(pos => {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
         const valorActual = precioUSD != null ? precioUSD * pos.cantidad : null;
         const plPrecio = valorActual != null ? valorActual - pos.costoTotal : null;
         const plTotal = plPrecio != null ? plPrecio + pos.dividendos : null;
-        const plPct = plPrecio != null && pos.costoTotal > 0
+        const plPctTotal = plPrecio != null && pos.costoTotal > 0
           ? (plPrecio / pos.costoTotal) * 100
           : null;
-        return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPct };
-      }).sort((a, b) => (b.plPct || 0) - (a.plPct || 0))
+        // Rendimiento del período desde histórico
+        const retPeriodo = historicos[pos.ticker]?.retornoPeriodo ?? null;
+        return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPctTotal, retPeriodo };
+      }).sort((a, b) => (b.retPeriodo || b.plPctTotal || 0) - (a.retPeriodo || a.plPctTotal || 0))
     : [];
 
   const SESGO_COLOR: Record<string, string> = {
@@ -343,6 +390,8 @@ export default function ReportesPage() {
     };
     return map[periodo] || periodo;
   };
+
+  const histLoaded = Object.keys(historicos).length > 0;
 
   return (
     <div style={{ maxWidth: '1100px' }}>
@@ -367,7 +416,7 @@ export default function ReportesPage() {
         </div>
       </div>
 
-      {/* Selector de período */}
+      {/* Selector período */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '20px', flexWrap: 'wrap' }}>
         {PERIODOS.map(p => (
           <button key={p.key} onClick={() => setPeriodo(p.key)}
@@ -381,11 +430,11 @@ export default function ReportesPage() {
       {periodo === 'custom' && (
         <div className="card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Desde</label>
+            <label style={{ fontSize: '11px', color: 'var(--muted2)' }}>Desde</label>
             <input type="date" value={customInicio} onChange={e => setCustomInicio(e.target.value)} className="input-field" style={{ width: '160px' }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Hasta</label>
+            <label style={{ fontSize: '11px', color: 'var(--muted2)' }}>Hasta</label>
             <input type="date" value={customFin} onChange={e => setCustomFin(e.target.value)} className="input-field" style={{ width: '160px' }} />
           </div>
           <button onClick={cargarReporte} disabled={!customInicio || !customFin || loading}
@@ -395,32 +444,28 @@ export default function ReportesPage() {
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
         <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
           <div style={{ fontFamily: 'DM Mono, monospace', color: 'var(--muted2)', fontSize: '14px' }}>Calculando reporte...</div>
         </div>
       )}
 
-      {/* Error */}
       {error && !loading && (
         <div className="card" style={{ textAlign: 'center', padding: '48px', borderColor: 'rgba(244,63,94,0.3)' }}>
-          <div style={{ color: 'var(--red)', fontSize: '14px', fontFamily: 'DM Sans, sans-serif' }}>{error}</div>
+          <div style={{ color: 'var(--red)', fontSize: '14px' }}>{error}</div>
         </div>
       )}
 
-      {/* Sin usuario */}
       {!userId && !loading && (
         <div className="card" style={{ textAlign: 'center', padding: '60px' }}>
           <div style={{ fontSize: '36px', marginBottom: '16px' }}>🔒</div>
-          <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)', marginBottom: '8px' }}>Iniciá sesión para ver tu reporte</div>
+          <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>Iniciá sesión para ver tu reporte</div>
         </div>
       )}
 
-      {/* Contenido */}
       {reporte && !loading && (
         <>
-          {/* Header del reporte */}
+          {/* Header reporte */}
           <div style={{ background: 'linear-gradient(135deg, #1a0a3d 0%, #0d0d1c 100%)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '12px', padding: '20px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.4)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--violet-light)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' }}>
@@ -446,7 +491,7 @@ export default function ReportesPage() {
               { label: 'Retorno período', value: fmtPct(retornoPeriodo), color: colorV(retornoPeriodo) },
               { label: 'Capital actual', value: fmtUSD(capitalActual), color: 'var(--violet-light)' },
               { label: 'Capital inicial', value: fmtUSD(reporte.capitalInicial), color: 'var(--text)' },
-              { label: 'Dividendos', value: fmtUSD(reporte.dividendosPeriodo), color: 'var(--green)' },
+              { label: 'Liquidez', value: fmtUSD(efectivo), color: '#06b6d4' },
               { label: 'Sharpe ratio', value: sharpe != null ? sharpe.toFixed(2) : '—', color: sharpe != null && sharpe > 1 ? 'var(--green)' : sharpe != null && sharpe < 0 ? 'var(--red)' : 'var(--amber)' },
             ].map(m => (
               <div key={m.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px 12px' }}>
@@ -458,7 +503,6 @@ export default function ReportesPage() {
 
           {/* Evolución + Performance */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>📈 Evolución del capital invertido</div>
               {reporte.historialCapital.length > 1 ? (
@@ -482,19 +526,27 @@ export default function ReportesPage() {
             </div>
 
             <div className="card">
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🏆 Performance por activo</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>🏆 Performance por activo</div>
+                <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
+                  {histLoaded ? 'rendimiento del período' : 'cargando históricos...'}
+                </div>
+              </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {perfData.length > 0 ? perfData.slice(0, 12).map(pos => (
-                  <div key={pos.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '56px', flexShrink: 0 }}>{pos.ticker}</div>
-                    <div style={{ flex: 1, height: '8px', background: 'var(--surface2)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', borderRadius: '4px', background: pos.plPct != null && pos.plPct >= 0 ? 'var(--green)' : 'var(--red)', width: `${Math.min(Math.abs(pos.plPct || 0), 100)}%` }} />
+                {perfData.length > 0 ? perfData.slice(0, 12).map(pos => {
+                  const val = pos.retPeriodo ?? pos.plPctTotal;
+                  return (
+                    <div key={pos.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '56px', flexShrink: 0 }}>{pos.ticker}</div>
+                      <div style={{ flex: 1, height: '8px', background: 'var(--surface2)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: '4px', background: val != null && val >= 0 ? 'var(--green)' : 'var(--red)', width: `${Math.min(Math.abs(val || 0), 100)}%` }} />
+                      </div>
+                      <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: colorV(val), width: '60px', textAlign: 'right', flexShrink: 0 }}>
+                        {val != null ? fmtPct(val) : <span style={{ color: 'var(--muted)' }}>...</span>}
+                      </div>
                     </div>
-                    <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: colorV(pos.plPct), width: '56px', textAlign: 'right', flexShrink: 0 }}>
-                      {pos.plPct != null ? fmtPct(pos.plPct) : <span style={{ color: 'var(--muted)' }}>...</span>}
-                    </div>
-                  </div>
-                )) : (
+                  );
+                }) : (
                   <div style={{ color: 'var(--muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Cargando precios...</div>
                 )}
               </div>
@@ -503,7 +555,6 @@ export default function ReportesPage() {
 
           {/* Riesgo + Sectores + Cauciones */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🛡️ Métricas de riesgo</div>
               {[
@@ -558,14 +609,17 @@ export default function ReportesPage() {
 
           {/* Tabla posiciones */}
           <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>📋 Posiciones abiertas</div>
+              <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
+                Rend. período · P&L total acumulado
+              </div>
             </div>
             <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
               <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                    {['Ticker', 'Sector', 'Cantidad', 'Costo prom.', 'Precio USD', 'Valor actual', 'P&L precio', 'Dividendos', 'P&L total', 'P&L %'].map(h => (
+                    {['Ticker', 'Sector', 'Cantidad', 'Costo prom.', 'Precio USD', 'Valor actual', 'Rend. período', 'P&L total', 'Dividendos', 'P&L %'].map(h => (
                       <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Ticker' || h === 'Sector' ? 'left' : 'right', whiteSpace: 'nowrap', fontFamily: 'DM Sans, sans-serif', fontSize: '12px' }}>{h}</th>
                     ))}
                   </tr>
@@ -590,17 +644,17 @@ export default function ReportesPage() {
                       <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>
                         {pos.valorActual != null ? fmtUSD(pos.valorActual) : '—'}
                       </td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPrecio) }}>
-                        {pos.plPrecio != null ? fmtUSD(pos.plPrecio) : '—'}
-                      </td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--green)' }}>
-                        {pos.dividendos > 0 ? fmtUSD(pos.dividendos) : '—'}
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.retPeriodo), fontWeight: 600 }}>
+                        {pos.retPeriodo != null ? fmtPct(pos.retPeriodo) : <span style={{ color: 'var(--muted)' }}>...</span>}
                       </td>
                       <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plTotal) }}>
                         {pos.plTotal != null ? fmtUSD(pos.plTotal) : '—'}
                       </td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPct), fontWeight: 600 }}>
-                        {pos.plPct != null ? fmtPct(pos.plPct) : '—'}
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--green)' }}>
+                        {pos.dividendos > 0 ? fmtUSD(pos.dividendos) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPctTotal), fontWeight: 600 }}>
+                        {pos.plPctTotal != null ? fmtPct(pos.plPctTotal) : '—'}
                       </td>
                     </tr>
                   ))}
@@ -612,14 +666,12 @@ export default function ReportesPage() {
                       <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)' }}>
                         {fmtUSD(perfData.reduce((s, p) => s + (p.valorActual || 0), 0))}
                       </td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(perfData.reduce((s, p) => s + (p.plPrecio || 0), 0)) }}>
-                        {fmtUSD(perfData.reduce((s, p) => s + (p.plPrecio || 0), 0))}
+                      <td />
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(perfData.reduce((s, p) => s + (p.plTotal || 0), 0)) }}>
+                        {fmtUSD(perfData.reduce((s, p) => s + (p.plTotal || 0), 0))}
                       </td>
                       <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--green)' }}>
                         {fmtUSD(perfData.reduce((s, p) => s + (p.dividendos || 0), 0))}
-                      </td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(perfData.reduce((s, p) => s + (p.plTotal || 0), 0)) }}>
-                        {fmtUSD(perfData.reduce((s, p) => s + (p.plTotal || 0), 0))}
                       </td>
                       <td />
                     </tr>
