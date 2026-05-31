@@ -50,6 +50,15 @@ const SECTOR_COLORS: Record<string, string> = {
   'Otros':          '#475569',
 };
 
+const RANGE_MAP: Record<string, string> = {
+  diario:    '5d',
+  semanal:   '1mo',
+  mensual:   '3mo',
+  anual:     '1y',
+  historico: '5y',
+  custom:    '5y',
+};
+
 interface PosicionActivo {
   ticker: string;
   tickerBuscar: string;
@@ -160,7 +169,7 @@ export default function ReportesPage() {
       if (tickersBase.length) {
         cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
-        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep);
+        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep, periodo);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -211,14 +220,20 @@ export default function ReportesPage() {
     setPrecios(preciosMap);
   }
 
-  async function cargarHistoricos(posiciones: PosicionActivo[], fechaInicio: string, mepActual: number) {
+  async function cargarHistoricos(
+    posiciones: PosicionActivo[],
+    fechaInicio: string,
+    mepActual: number,
+    periodoActual: string
+  ) {
+    const range = RANGE_MAP[periodoActual] || '1y';
     const historicosMap: Record<string, HistoricoInfo> = {};
+
     await Promise.all(
       posiciones.map(async pos => {
         try {
-          // Usar tickerBuscar (con D) para Yahoo — mismo que precios
           const res = await fetch(
-            `/api/historico?ticker=${pos.tickerBuscar}&suffix=&range=1y&interval=1d`
+            `/api/historico?ticker=${pos.tickerBuscar}&suffix=&range=${range}&interval=1d`
           );
           const data = await res.json();
           if (!data.historico?.length) {
@@ -228,18 +243,16 @@ export default function ReportesPage() {
 
           const hist: { fecha: string; cierre: number }[] = data.historico;
 
-          // Precio al inicio del período — buscar el más cercano anterior a fechaInicio
+          // Precio al inicio del período — el más cercano anterior a fechaInicio
           const precioInicioEntry = [...hist]
             .filter(h => h.fecha <= fechaInicio)
             .at(-1) || hist[0];
           const precioInicio = precioInicioEntry?.cierre ?? null;
 
-          // Precio actual — último dato del histórico
+          // Precio actual — último dato
           const precioActualEntry = hist.at(-1);
           const precioActualHist = precioActualEntry?.cierre ?? null;
 
-          // Convertir a USD si es necesario (CEDEARs con D ya vienen en USD de Yahoo)
-          // El histórico de Yahoo para ASMLD viene en USD directamente
           const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
             ? ((precioActualHist - precioInicio) / precioInicio) * 100
             : null;
@@ -262,9 +275,7 @@ export default function ReportesPage() {
     setIALoading(true);
     setIAError(null);
     try {
-      const mep = reporte.mep || 1430;
       const efectivo = reporte.efectivoUSD || 0;
-
       const capitalActivo = reporte.performancePorActivo.reduce((sum, pos) => {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
         return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
@@ -342,7 +353,6 @@ export default function ReportesPage() {
     ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
     : null;
 
-  // Exposición sectorial
   const expSectorial: Record<string, number> = {};
   if (reporte) {
     reporte.performancePorActivo.forEach(pos => {
@@ -360,7 +370,6 @@ export default function ReportesPage() {
     }))
     .sort((a, b) => b.valor - a.valor);
 
-  // Performance con rendimiento del período desde históricos
   const perfData = reporte
     ? reporte.performancePorActivo.map(pos => {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
@@ -370,11 +379,12 @@ export default function ReportesPage() {
         const plPctTotal = plPrecio != null && pos.costoTotal > 0
           ? (plPrecio / pos.costoTotal) * 100
           : null;
-        // Rendimiento del período desde histórico
         const retPeriodo = historicos[pos.ticker]?.retornoPeriodo ?? null;
         return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPctTotal, retPeriodo };
-      }).sort((a, b) => (b.retPeriodo || b.plPctTotal || 0) - (a.retPeriodo || a.plPctTotal || 0))
+      }).sort((a, b) => (b.retPeriodo ?? b.plPctTotal ?? 0) - (a.retPeriodo ?? a.plPctTotal ?? 0))
     : [];
+
+  const histLoaded = Object.keys(historicos).length > 0;
 
   const SESGO_COLOR: Record<string, string> = {
     'Alcista': 'var(--green)', 'Neutral': 'var(--amber)', 'Bajista': 'var(--red)',
@@ -391,12 +401,9 @@ export default function ReportesPage() {
     return map[periodo] || periodo;
   };
 
-  const histLoaded = Object.keys(historicos).length > 0;
-
   return (
     <div style={{ maxWidth: '1100px' }}>
 
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: isMobile ? '20px' : '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Reportes</h1>
@@ -416,7 +423,6 @@ export default function ReportesPage() {
         </div>
       </div>
 
-      {/* Selector período */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '20px', flexWrap: 'wrap' }}>
         {PERIODOS.map(p => (
           <button key={p.key} onClick={() => setPeriodo(p.key)}
@@ -426,7 +432,6 @@ export default function ReportesPage() {
         ))}
       </div>
 
-      {/* Rango custom */}
       {periodo === 'custom' && (
         <div className="card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -465,7 +470,6 @@ export default function ReportesPage() {
 
       {reporte && !loading && (
         <>
-          {/* Header reporte */}
           <div style={{ background: 'linear-gradient(135deg, #1a0a3d 0%, #0d0d1c 100%)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '12px', padding: '20px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.4)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', color: 'var(--violet-light)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' }}>
@@ -485,7 +489,6 @@ export default function ReportesPage() {
             )}
           </div>
 
-          {/* Métricas principales */}
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${isMobile ? 2 : 5}, 1fr)`, gap: '10px', marginBottom: '16px' }}>
             {[
               { label: 'Retorno período', value: fmtPct(retornoPeriodo), color: colorV(retornoPeriodo) },
@@ -501,7 +504,6 @@ export default function ReportesPage() {
             ))}
           </div>
 
-          {/* Evolución + Performance */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>📈 Evolución del capital invertido</div>
@@ -529,7 +531,7 @@ export default function ReportesPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>🏆 Performance por activo</div>
                 <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
-                  {histLoaded ? 'rendimiento del período' : 'cargando históricos...'}
+                  {histLoaded ? `rendimiento ${periodoLabel().toLowerCase()}` : 'cargando históricos...'}
                 </div>
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
@@ -553,7 +555,6 @@ export default function ReportesPage() {
             </div>
           </div>
 
-          {/* Riesgo + Sectores + Cauciones */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🛡️ Métricas de riesgo</div>
@@ -607,13 +608,10 @@ export default function ReportesPage() {
             </div>
           </div>
 
-          {/* Tabla posiciones */}
           <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px' }}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>📋 Posiciones abiertas</div>
-              <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
-                Rend. período · P&L total acumulado
-              </div>
+              <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Rend. período · P&L total acumulado</div>
             </div>
             <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
               <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
@@ -681,7 +679,6 @@ export default function ReportesPage() {
             </div>
           </div>
 
-          {/* Análisis IA */}
           <div className="card" style={{ marginBottom: '16px' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>✨ Análisis IA del período</div>
             {!iaData && !iaLoading && (
