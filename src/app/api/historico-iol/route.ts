@@ -19,8 +19,7 @@ async function getToken(): Promise<string | null> {
 }
 
 function toIOLDate(fecha: string): string {
-  // IOL espera formato date-time: yyyy-MM-ddTHH:mm:ss
-  return `${fecha}T00:00:00`;
+  return fecha; // yyyy-MM-dd directamente
 }
 
 export async function GET(request: NextRequest) {
