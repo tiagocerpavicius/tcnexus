@@ -1,9 +1,8 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Download, RefreshCw, Sparkles, Calendar, TrendingUp, TrendingDown, AlertTriangle, CheckCircle } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
+import { Download, RefreshCw, Sparkles, Calendar, AlertTriangle, CheckCircle } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 const TOOLTIP_STYLE = {
@@ -20,11 +19,11 @@ const TOOLTIP_LABEL_STYLE = { color: 'var(--muted2)' };
 type Periodo = 'diario' | 'semanal' | 'mensual' | 'anual' | 'historico' | 'custom';
 
 const PERIODOS: { key: Periodo; label: string; icon: string }[] = [
-  { key: 'diario',    label: 'Diario',       icon: '📅' },
-  { key: 'semanal',   label: 'Semanal',      icon: '📆' },
-  { key: 'mensual',   label: 'Mensual',      icon: '🗓️' },
-  { key: 'anual',     label: 'Anual',        icon: '📊' },
-  { key: 'historico', label: 'Histórico',    icon: '📈' },
+  { key: 'diario',    label: 'Diario',        icon: '📅' },
+  { key: 'semanal',   label: 'Semanal',       icon: '📆' },
+  { key: 'mensual',   label: 'Mensual',       icon: '🗓️' },
+  { key: 'anual',     label: 'Anual',         icon: '📊' },
+  { key: 'historico', label: 'Histórico',     icon: '📈' },
   { key: 'custom',    label: 'Personalizado', icon: '🎯' },
 ];
 
@@ -36,43 +35,55 @@ const colorV = (n: number | null | undefined) =>
   n == null ? 'var(--text2)' : n > 0 ? 'var(--green)' : n < 0 ? 'var(--red)' : 'var(--text2)';
 
 const SECTOR_COLORS: Record<string, string> = {
-  'Tecnología':      '#7c3aed',
-  'Financiero':      '#06b6d4',
-  'Energía':         '#f59e0b',
-  'Consumo':         '#10b981',
-  'Salud':           '#ec4899',
-  'Industriales':    '#8b5cf6',
-  'Materiales':      '#f97316',
-  'Comunicaciones':  '#14b8a6',
-  'Real Estate':     '#a3e635',
-  'Renta Fija':      '#94a3b8',
-  'Cripto':          '#f43f5e',
-  'Otros':           '#475569',
+  'Tecnología':     '#7c3aed',
+  'Financiero':     '#06b6d4',
+  'Energía':        '#f59e0b',
+  'Consumo':        '#10b981',
+  'Salud':          '#ec4899',
+  'Industriales':   '#8b5cf6',
+  'Materiales':     '#f97316',
+  'Comunicaciones': '#14b8a6',
+  'Real Estate':    '#a3e635',
+  'Renta Fija':     '#94a3b8',
+  'Cripto':         '#f43f5e',
+  'Otros':          '#475569',
 };
+
+interface PosicionActivo {
+  ticker: string;
+  tickerBuscar: string;
+  cantidad: number;
+  costoTotal: number;
+  costoPromedio: number;
+  dividendos: number;
+  tipo: string;
+  broker: string;
+}
 
 interface ReporteData {
   periodo: string;
   fechaInicio: string;
   fechaFin: string;
+  mep: number;
   capitalInicial: number;
   depositosPeriodo: number;
   retirosPeriodo: number;
   dividendosPeriodo: number;
-  plRealizado: number;
   capitalCaucionado: number;
   interesesCauciones: number;
   tnaPromedio: number | null;
   tickersAbiertos: string[];
-  performancePorActivo: {
-    ticker: string; cantidad: number; costoTotal: number;
-    costoPromedio: number; dividendos: number; tipo: string; broker: string;
-  }[];
+  performancePorActivo: PosicionActivo[];
   historialCapital: { fecha: string; valor: number }[];
-  retornosMensuales: { mes: string; retorno: number | null }[];
   volatilidad: number | null;
   maxDrawdown: number;
   totalOps: number;
   opsPeriodoCount: number;
+}
+
+interface PrecioInfo {
+  precio: number | null;
+  moneda: string;
 }
 
 interface IAData {
@@ -94,7 +105,7 @@ export default function ReportesPage() {
   const [loading, setLoading] = useState(false);
   const [reporte, setReporte] = useState<ReporteData | null>(null);
   const [sectores, setSectores] = useState<Record<string, { sector: string; industria: string; pais: string }>>({});
-  const [precios, setPrecios] = useState<Record<string, number | null>>({});
+  const [precios, setPrecios] = useState<Record<string, PrecioInfo>>({});
   const [iaData, setIAData] = useState<IAData | null>(null);
   const [iaLoading, setIALoading] = useState(false);
   const [iaError, setIAError] = useState<string | null>(null);
@@ -135,10 +146,13 @@ export default function ReportesPage() {
       if (data.error) throw new Error(data.error);
       setReporte(data);
 
-      // Cargar sectores y precios en paralelo
-      if (data.tickersAbiertos?.length) {
-        cargarSectores(data.tickersAbiertos);
-        cargarPrecios(data.tickersAbiertos);
+      // Cargar sectores y precios usando tickerBuscar (con D para CEDEARs)
+      const tickersBuscar = data.performancePorActivo.map((p: PosicionActivo) => p.tickerBuscar);
+      const tickersBase = data.performancePorActivo.map((p: PosicionActivo) => p.ticker);
+
+      if (tickersBuscar.length) {
+        cargarSectores(tickersBase); // sectores usan ticker base sin D
+        cargarPrecios(data.performancePorActivo, data.mep);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -158,19 +172,37 @@ export default function ReportesPage() {
     } catch {}
   }
 
-  async function cargarPrecios(tickers: string[]) {
-    const preciosMap: Record<string, number | null> = {};
+  async function cargarPrecios(posiciones: PosicionActivo[], mepActual: number) {
+    const preciosMap: Record<string, PrecioInfo> = {};
     await Promise.all(
-      tickers.map(async ticker => {
+      posiciones.map(async pos => {
         try {
-          const res = await fetch(`/api/buscar?ticker=${ticker}`);
+          // Usar tickerBuscar (con D para CEDEARs) para traer precio en USD directamente
+          const res = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
           const data = await res.json();
-          const precio = data.tipo === 'cedear'
-            ? data.precio?.valor
-            : (data.precio?.valor ?? data.precio);
-          preciosMap[ticker] = typeof precio === 'number' ? precio : null;
+          let precio: number | null = null;
+          let moneda = 'USD';
+
+          if (data.tipo === 'cedear') {
+            precio = data.precio?.valor ?? null;
+            moneda = data.precio?.moneda || 'ARS';
+          } else if (data.tipo === 'renta_variable') {
+            precio = data.precio ?? null;
+            moneda = data.monedaLabel || 'USD';
+          } else if (data.tipo === 'renta_fija') {
+            precio = data.precio?.valor ?? null;
+            moneda = data.monedaLabel || 'USD';
+          }
+
+          // Convertir a USD si viene en ARS
+          const precioUSD = precio != null
+            ? (moneda === 'ARS' ? precio / mepActual : precio)
+            : null;
+
+          // Guardar con key = ticker base (sin D)
+          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
         } catch {
-          preciosMap[ticker] = null;
+          preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
         }
       })
     );
@@ -182,10 +214,12 @@ export default function ReportesPage() {
     setIALoading(true);
     setIAError(null);
     try {
-      // Calcular capital actual con precios
+      const mep = reporte.mep || 1430;
+
       const capitalActivo = reporte.performancePorActivo.reduce((sum, pos) => {
-        const precio = precios[pos.ticker];
-        return sum + (precio != null ? precio * pos.cantidad : pos.costoTotal);
+        const precioInfo = precios[pos.ticker];
+        const precioUSD = precioInfo?.precio ?? null;
+        return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
       }, 0);
       const capitalActual = capitalActivo + reporte.interesesCauciones;
       const retornoPeriodo = reporte.capitalInicial > 0
@@ -230,9 +264,9 @@ export default function ReportesPage() {
           benchmarks: null,
         }),
       });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setIAData(data);
+      const iaRes = await res.json();
+      if (iaRes.error) throw new Error(iaRes.error);
+      setIAData(iaRes);
     } catch (e: any) {
       setIAError(e.message || 'Error al generar análisis IA');
     }
@@ -243,22 +277,27 @@ export default function ReportesPage() {
     window.print();
   }
 
-  // Calcular métricas derivadas
+  // Métricas derivadas
+  const mep = reporte?.mep || 1430;
+
   const capitalActivo = reporte
     ? reporte.performancePorActivo.reduce((sum, pos) => {
-        const precio = precios[pos.ticker];
-        return sum + (precio != null ? precio * pos.cantidad : pos.costoTotal);
+        const precioUSD = precios[pos.ticker]?.precio ?? null;
+        return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
       }, 0)
     : 0;
+
   const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0);
+
   const retornoPeriodo = reporte && reporte.capitalInicial > 0
     ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
     : null;
+
   const sharpe = reporte?.volatilidad && reporte.volatilidad > 0 && retornoPeriodo != null
     ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
     : null;
 
-  // Exposición sectorial calculada
+  // Exposición sectorial
   const expSectorial: Record<string, number> = {};
   if (reporte) {
     reporte.performancePorActivo.forEach(pos => {
@@ -266,27 +305,27 @@ export default function ReportesPage() {
       expSectorial[s] = (expSectorial[s] || 0) + pos.costoTotal;
     });
   }
-  const totalCosto = Object.values(expSectorial).reduce((a, b) => a + b, 0);
+  const totalCostoSect = Object.values(expSectorial).reduce((a, b) => a + b, 0);
   const sectorData = Object.entries(expSectorial)
     .map(([sector, valor]) => ({
       sector,
       valor,
-      pct: totalCosto > 0 ? +(valor / totalCosto * 100).toFixed(1) : 0,
+      pct: totalCostoSect > 0 ? +(valor / totalCostoSect * 100).toFixed(1) : 0,
       color: SECTOR_COLORS[sector] || '#475569',
     }))
     .sort((a, b) => b.valor - a.valor);
 
-  // Performance por activo con P&L
+  // Performance por activo con P&L en USD
   const perfData = reporte
     ? reporte.performancePorActivo.map(pos => {
-        const precioActual = precios[pos.ticker];
-        const valorActual = precioActual != null ? precioActual * pos.cantidad : null;
+        const precioUSD = precios[pos.ticker]?.precio ?? null;
+        const valorActual = precioUSD != null ? precioUSD * pos.cantidad : null;
         const plPrecio = valorActual != null ? valorActual - pos.costoTotal : null;
         const plTotal = plPrecio != null ? plPrecio + pos.dividendos : null;
         const plPct = plPrecio != null && pos.costoTotal > 0
           ? (plPrecio / pos.costoTotal) * 100
           : null;
-        return { ...pos, precioActual, valorActual, plPrecio, plTotal, plPct };
+        return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPct };
       }).sort((a, b) => (b.plPct || 0) - (a.plPct || 0))
     : [];
 
@@ -307,6 +346,7 @@ export default function ReportesPage() {
 
   return (
     <div style={{ maxWidth: '1100px' }}>
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
@@ -342,13 +382,11 @@ export default function ReportesPage() {
         <div className="card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '11px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Desde</label>
-            <input type="date" value={customInicio} onChange={e => setCustomInicio(e.target.value)}
-              className="input-field" style={{ width: '160px' }} />
+            <input type="date" value={customInicio} onChange={e => setCustomInicio(e.target.value)} className="input-field" style={{ width: '160px' }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '11px', color: 'var(--muted2)', fontFamily: 'DM Sans, sans-serif' }}>Hasta</label>
-            <input type="date" value={customFin} onChange={e => setCustomFin(e.target.value)}
-              className="input-field" style={{ width: '160px' }} />
+            <input type="date" value={customFin} onChange={e => setCustomFin(e.target.value)} className="input-field" style={{ width: '160px' }} />
           </div>
           <button onClick={cargarReporte} disabled={!customInicio || !customFin || loading}
             className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -379,7 +417,7 @@ export default function ReportesPage() {
         </div>
       )}
 
-      {/* Contenido del reporte */}
+      {/* Contenido */}
       {reporte && !loading && (
         <>
           {/* Header del reporte */}
@@ -392,7 +430,7 @@ export default function ReportesPage() {
                 {new Date(reporte.fechaInicio).toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' })} → {new Date(reporte.fechaFin).toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' })}
               </div>
               <div style={{ fontSize: '12px', color: 'var(--muted2)', marginTop: '4px', fontFamily: 'DM Mono, monospace' }}>
-                {reporte.totalOps} operaciones totales · {reporte.opsPeriodoCount} en el período
+                {reporte.totalOps} operaciones totales · {reporte.opsPeriodoCount} en el período · MEP ${mep.toLocaleString('es-AR')}
               </div>
             </div>
             {reporte.capitalCaucionado > 0 && (
@@ -421,9 +459,8 @@ export default function ReportesPage() {
           {/* Evolución + Performance */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
 
-            {/* Gráfico evolución */}
             <div className="card">
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>📈 Evolución del capital</div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>📈 Evolución del capital invertido</div>
               {reporte.historialCapital.length > 1 ? (
                 <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={reporte.historialCapital} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
@@ -434,38 +471,39 @@ export default function ReportesPage() {
                     <YAxis tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
                       tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} width={45} />
                     <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
-                      formatter={(v: number) => [fmtUSD(v), 'Capital']}
+                      formatter={(v: number) => [fmtUSD(v), 'Invertido']}
                       labelFormatter={v => new Date(v).toLocaleDateString('es-AR')} />
                     <Line type="monotone" dataKey="valor" stroke="var(--violet)" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '13px' }}>Sin suficientes datos para el gráfico</div>
+                <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '13px' }}>Sin suficientes datos</div>
               )}
             </div>
 
-            {/* Performance por activo */}
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🏆 Performance por activo</div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {perfData.slice(0, 10).map(pos => (
+                {perfData.length > 0 ? perfData.slice(0, 12).map(pos => (
                   <div key={pos.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '52px', flexShrink: 0 }}>{pos.ticker}</div>
+                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '56px', flexShrink: 0 }}>{pos.ticker}</div>
                     <div style={{ flex: 1, height: '8px', background: 'var(--surface2)', borderRadius: '4px', overflow: 'hidden' }}>
                       <div style={{ height: '100%', borderRadius: '4px', background: pos.plPct != null && pos.plPct >= 0 ? 'var(--green)' : 'var(--red)', width: `${Math.min(Math.abs(pos.plPct || 0), 100)}%` }} />
                     </div>
-                    <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: colorV(pos.plPct), width: '52px', textAlign: 'right', flexShrink: 0 }}>{fmtPct(pos.plPct)}</div>
+                    <div style={{ fontFamily: 'DM Mono, monospace', fontSize: '12px', color: colorV(pos.plPct), width: '56px', textAlign: 'right', flexShrink: 0 }}>
+                      {pos.plPct != null ? fmtPct(pos.plPct) : <span style={{ color: 'var(--muted)' }}>...</span>}
+                    </div>
                   </div>
-                ))}
-                {perfData.length === 0 && <div style={{ color: 'var(--muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Cargando precios...</div>}
+                )) : (
+                  <div style={{ color: 'var(--muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Cargando precios...</div>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Métricas de riesgo + Sectores + Cauciones */}
+          {/* Riesgo + Sectores + Cauciones */}
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
 
-            {/* Riesgo */}
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🛡️ Métricas de riesgo</div>
               {[
@@ -481,7 +519,6 @@ export default function ReportesPage() {
               ))}
             </div>
 
-            {/* Sectores */}
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🗂️ Exposición sectorial</div>
               {sectorData.length > 0 ? sectorData.map(s => (
@@ -497,7 +534,6 @@ export default function ReportesPage() {
               )}
             </div>
 
-            {/* Cauciones */}
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🔒 Cauciones del período</div>
               {reporte.capitalCaucionado > 0 ? (
@@ -520,7 +556,7 @@ export default function ReportesPage() {
             </div>
           </div>
 
-          {/* Tabla de posiciones */}
+          {/* Tabla posiciones */}
           <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px' }}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>📋 Posiciones abiertas</div>
@@ -529,7 +565,7 @@ export default function ReportesPage() {
               <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                    {['Ticker', 'Sector', 'Cantidad', 'Costo prom.', 'Precio actual', 'Valor actual', 'P&L precio', 'Dividendos', 'P&L total', 'P&L %'].map(h => (
+                    {['Ticker', 'Sector', 'Cantidad', 'Costo prom.', 'Precio USD', 'Valor actual', 'P&L precio', 'Dividendos', 'P&L total', 'P&L %'].map(h => (
                       <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Ticker' || h === 'Sector' ? 'left' : 'right', whiteSpace: 'nowrap', fontFamily: 'DM Sans, sans-serif', fontSize: '12px' }}>{h}</th>
                     ))}
                   </tr>
@@ -537,7 +573,7 @@ export default function ReportesPage() {
                 <tbody>
                   {perfData.map((pos, i) => (
                     <tr key={pos.ticker} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
-                      <td style={{ padding: '10px 16px', position: 'sticky', left: 0, background: i % 2 === 0 ? 'var(--surface)' : 'var(--surface)', zIndex: 1 }}>
+                      <td style={{ padding: '10px 16px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
                         <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{pos.ticker}</div>
                         <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{pos.broker}</div>
                       </td>
@@ -548,15 +584,47 @@ export default function ReportesPage() {
                       </td>
                       <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>{pos.cantidad.toFixed(2)}</td>
                       <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtUSD(pos.costoPromedio)}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>{pos.precioActual != null ? fmtUSD(pos.precioActual) : '—'}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>{pos.valorActual != null ? fmtUSD(pos.valorActual) : '—'}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPrecio) }}>{pos.plPrecio != null ? fmtUSD(pos.plPrecio) : '—'}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--green)' }}>{fmtUSD(pos.dividendos)}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plTotal) }}>{pos.plTotal != null ? fmtUSD(pos.plTotal) : '—'}</td>
-                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPct), fontWeight: 600 }}>{fmtPct(pos.plPct)}</td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>
+                        {pos.precioUSD != null ? fmtUSD(pos.precioUSD) : <span style={{ color: 'var(--muted)' }}>...</span>}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>
+                        {pos.valorActual != null ? fmtUSD(pos.valorActual) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPrecio) }}>
+                        {pos.plPrecio != null ? fmtUSD(pos.plPrecio) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--green)' }}>
+                        {pos.dividendos > 0 ? fmtUSD(pos.dividendos) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plTotal) }}>
+                        {pos.plTotal != null ? fmtUSD(pos.plTotal) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.plPct), fontWeight: 600 }}>
+                        {pos.plPct != null ? fmtPct(pos.plPct) : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
+                {perfData.length > 0 && (
+                  <tfoot>
+                    <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
+                      <td colSpan={5} style={{ padding: '10px 16px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '13px' }}>Total</td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)' }}>
+                        {fmtUSD(perfData.reduce((s, p) => s + (p.valorActual || 0), 0))}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(perfData.reduce((s, p) => s + (p.plPrecio || 0), 0)) }}>
+                        {fmtUSD(perfData.reduce((s, p) => s + (p.plPrecio || 0), 0))}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--green)' }}>
+                        {fmtUSD(perfData.reduce((s, p) => s + (p.dividendos || 0), 0))}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(perfData.reduce((s, p) => s + (p.plTotal || 0), 0)) }}>
+                        {fmtUSD(perfData.reduce((s, p) => s + (p.plTotal || 0), 0))}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           </div>
@@ -567,7 +635,9 @@ export default function ReportesPage() {
             {!iaData && !iaLoading && (
               <div style={{ textAlign: 'center', padding: '32px' }}>
                 <div style={{ fontSize: '32px', marginBottom: '12px' }}>🤖</div>
-                <div style={{ fontSize: '13px', color: 'var(--muted2)', marginBottom: '20px', fontFamily: 'DM Sans, sans-serif' }}>Generá un análisis inteligente de tu portfolio para este período.</div>
+                <div style={{ fontSize: '13px', color: 'var(--muted2)', marginBottom: '20px', fontFamily: 'DM Sans, sans-serif' }}>
+                  Generá un análisis inteligente de tu portfolio para este período.
+                </div>
                 <button onClick={generarIA} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px' }}>
                   <Sparkles size={16} /> Generar análisis IA
                 </button>
@@ -575,11 +645,12 @@ export default function ReportesPage() {
               </div>
             )}
             {iaLoading && (
-              <div style={{ textAlign: 'center', padding: '32px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>Analizando portfolio con IA...</div>
+              <div style={{ textAlign: 'center', padding: '32px', color: 'var(--muted2)', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+                Analizando portfolio con IA...
+              </div>
             )}
             {iaData && (
               <div>
-                {/* Sesgo y confianza */}
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
                   <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
                     <div style={{ fontSize: '11px', color: 'var(--text2)', marginBottom: '6px' }}>Sesgo</div>
@@ -595,7 +666,6 @@ export default function ReportesPage() {
                   </div>
                 </div>
 
-                {/* Resumen ejecutivo */}
                 <div style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--violet-light)', marginBottom: '8px' }}>Resumen ejecutivo</div>
                   <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.7', fontFamily: 'DM Sans, sans-serif' }}>{iaData.resumen_ejecutivo}</div>
@@ -620,7 +690,6 @@ export default function ReportesPage() {
                 )}
 
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
-                  {/* Recomendaciones */}
                   <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
                     <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--green)', marginBottom: '10px' }}>💡 Recomendaciones</div>
                     {iaData.recomendaciones.map((r, i) => (
@@ -630,8 +699,6 @@ export default function ReportesPage() {
                       </div>
                     ))}
                   </div>
-
-                  {/* Alertas */}
                   <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
                     <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--red)', marginBottom: '10px' }}>⚠️ Alertas</div>
                     {iaData.alertas.filter(a => a).map((a, i) => (
@@ -649,7 +716,8 @@ export default function ReportesPage() {
                   </div>
                 </div>
 
-                <button onClick={() => { setIAData(null); setIAError(null); }} style={{ marginTop: '12px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted2)', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button onClick={() => { setIAData(null); setIAError(null); }}
+                  style={{ marginTop: '12px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted2)', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <RefreshCw size={13} /> Regenerar análisis
                 </button>
               </div>
