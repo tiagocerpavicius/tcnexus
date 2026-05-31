@@ -40,14 +40,10 @@ function getFechaInicio(periodo: string, fechaCustomInicio?: string): string {
   return hoy.toISOString().split('T')[0];
 }
 
-// Normaliza ticker para buscar precio: agrega D si es cedear ARS
 function tickerParaBuscar(ticker: string, tipoActivo: string): string {
   const upper = ticker.toUpperCase();
-  // Si ya termina en D no tocar
   if (upper.endsWith('D')) return upper;
-  // Bonos y acciones AR no llevan D
   if (tipoActivo === 'bono' || tipoActivo === 'accion_ar' || tipoActivo === 'efectivo') return upper;
-  // CEDEARs → agregar D para traer precio en USD de IOL
   if (tipoActivo === 'cedear') return upper + 'D';
   return upper;
 }
@@ -57,7 +53,7 @@ export async function POST(request: NextRequest) {
     const { user_id, periodo, fechaCustomInicio, fechaCustomFin } = await request.json();
     if (!user_id) return NextResponse.json({ error: 'user_id requerido' }, { status: 400 });
 
-    // Traer MEP actual
+    // MEP actual
     let mep = 1430;
     try {
       const dolarRes = await fetch('https://dolarapi.com/v1/dolares');
@@ -69,7 +65,7 @@ export async function POST(request: NextRequest) {
     const fechaInicio = getFechaInicio(periodo, fechaCustomInicio);
     const fechaFin = fechaCustomFin || new Date().toISOString().split('T')[0];
 
-    // 1. Traer todas las operaciones del usuario hasta fechaFin
+    // 1. Operaciones del usuario hasta fechaFin
     const { data: ops, error: opsError } = await supabase
       .from('operaciones')
       .select('*')
@@ -80,7 +76,7 @@ export async function POST(request: NextRequest) {
     if (opsError) throw opsError;
     if (!ops?.length) return NextResponse.json({ error: 'Sin operaciones' }, { status: 404 });
 
-    // 2. Traer cauciones del usuario
+    // 2. Cauciones
     const { data: cauciones } = await supabase
       .from('cauciones')
       .select('*')
@@ -101,7 +97,7 @@ export async function POST(request: NextRequest) {
     const depositosPeriodo = opsPeriodo.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const retirosPeriodo = opsPeriodo.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
 
-    // 5. Calcular posiciones abiertas — single pass cronológico
+    // 5. Posiciones — single pass cronológico
     const transferCostPerUnit = new Map<string, number>();
     const posiciones = new Map<string, {
       cantidad: number; costoTotal: number; tipo: string; broker: string; moneda: string;
@@ -120,7 +116,6 @@ export async function POST(request: NextRequest) {
     for (const op of sorted) {
       const t = op.ticker?.toUpperCase();
       if (!t || op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'dividendo') continue;
-      // Normalizar ticker (quitar D al final para la key)
       const key = t.endsWith('D') && t.length > 2 ? t.slice(0, -1) : t;
 
       if (!posiciones.has(key)) {
@@ -159,15 +154,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 6. Tickers abiertos
-    const tickersAbiertos = Array.from(posiciones.entries())
-      .filter(([, v]) => v.cantidad > 0.0001)
-      .map(([ticker, pos]) => ({
-        ticker,
-        tickerBuscar: tickerParaBuscar(ticker, pos.tipo),
-      }));
-
-    // 7. Dividendos del período y por ticker
+    // 6. Dividendos por ticker
     const dividendosPeriodo = opsPeriodo
       .filter(o => o.tipo === 'dividendo')
       .reduce((s, o) => s + (o.monto_usd || 0), 0);
@@ -182,7 +169,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // 8. Performance por activo
+    // 7. Performance por activo
     const performancePorActivo = Array.from(posiciones.entries())
       .filter(([, v]) => v.cantidad > 0.0001)
       .map(([ticker, pos]) => ({
@@ -196,7 +183,7 @@ export async function POST(request: NextRequest) {
         broker: pos.broker,
       }));
 
-    // 9. Cauciones métricas
+    // 8. Cauciones métricas
     const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
     const capitalCaucionado = (cauciones || []).reduce((s, c) => s + (c.monto || 0), 0);
     const tnasValidas = (cauciones || []).filter((c: any) => c.tna).map((c: any) => c.tna);
@@ -204,7 +191,18 @@ export async function POST(request: NextRequest) {
       ? tnasValidas.reduce((a: number, b: number) => a + b, 0) / tnasValidas.length
       : null;
 
-    // 10. Historial de capital por fecha
+    // 9. Efectivo disponible
+    let efectivoUSD = 0;
+    for (const op of ops) {
+      if (op.tipo === 'deposito') efectivoUSD += op.monto_usd || 0;
+      else if (op.tipo === 'retiro') efectivoUSD -= op.monto_usd || 0;
+      else if (op.tipo === 'compra') efectivoUSD -= op.monto_usd || 0;
+      else if (op.tipo === 'venta') efectivoUSD += op.monto_usd || 0;
+      else if (op.tipo === 'dividendo') efectivoUSD += op.monto_usd || 0;
+    }
+    efectivoUSD = Math.max(0, efectivoUSD);
+
+    // 10. Historial de capital por fecha (depósitos acumulados)
     let acumDepositos = 0;
     const historialCapital: { fecha: string; valor: number }[] = [];
     const fechasUnicas = Array.from(new Set(ops.map(o => o.fecha))).sort();
@@ -234,7 +232,8 @@ export async function POST(request: NextRequest) {
       capitalCaucionado,
       interesesCauciones,
       tnaPromedio,
-      tickersAbiertos: tickersAbiertos.map(t => t.tickerBuscar),
+      efectivoUSD,
+      tickersAbiertos: performancePorActivo.map(p => p.tickerBuscar),
       performancePorActivo,
       historialCapital,
       volatilidad,
