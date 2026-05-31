@@ -194,37 +194,43 @@ export default function ReportesPage() {
   await Promise.all(
     posiciones.map(async pos => {
       try {
-        // Intento 1: ticker con D (precio USD directo)
-        let res = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
-        let data = await res.json();
+        // Intento 1: ticker con D (precio USD directo de IOL)
+        const res1 = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
+        const data1 = await res1.json();
 
-        // Intento 2: si falla, usar ticker sin D en ARS y dividir por MEP
-        if (data.error) {
-          res = await fetch(`/api/buscar?ticker=${pos.ticker}`);
-          data = await res.json();
-        }
-
-        let precio: number | null = null;
-        let moneda = 'USD';
-
-        if (!data.error) {
-          if (data.tipo === 'cedear') {
-            precio = data.precio?.valor ?? null;
-            moneda = data.precio?.moneda || 'ARS';
-          } else if (data.tipo === 'renta_variable') {
-            precio = data.precio ?? null;
-            moneda = data.monedaLabel || 'USD';
-          } else if (data.tipo === 'renta_fija') {
-            precio = data.precio?.valor ?? null;
-            moneda = data.monedaLabel || 'USD';
+        if (!data1.error) {
+          let precio: number | null = null;
+          let moneda = 'USD';
+          if (data1.tipo === 'cedear') {
+            precio = data1.precio?.valor ?? null;
+            moneda = data1.precio?.moneda || 'ARS';
+          } else if (data1.tipo === 'renta_variable') {
+            precio = data1.precio ?? null;
+            moneda = data1.monedaLabel || 'USD';
+          } else if (data1.tipo === 'renta_fija') {
+            precio = data1.precio?.valor ?? null;
+            moneda = data1.monedaLabel || 'USD';
           }
+          const precioUSD = precio != null
+            ? (moneda === 'ARS' ? precio / mepActual : precio)
+            : null;
+          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+          return;
         }
 
-        const precioUSD = precio != null
-          ? (moneda === 'ARS' ? precio / mepActual : precio)
-          : null;
+        // Intento 2: ticker sin D en ARS → dividir por MEP
+        const res2 = await fetch(`/api/buscar?ticker=${pos.ticker}`);
+        const data2 = await res2.json();
 
-        preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+        if (!data2.error) {
+          // Siempre viene en ARS cuando usamos sin D
+          const precioARS = data2.precio?.valor ?? data2.precio ?? null;
+          const precioUSD = precioARS != null ? precioARS / mepActual : null;
+          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+          return;
+        }
+
+        preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
       } catch {
         preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
       }
