@@ -108,9 +108,12 @@ interface HistoricoInfo {
 
 interface IAData {
   resumen_ejecutivo: string;
+  contexto_mercado: string;
   analisis_rendimiento: string;
   analisis_riesgo: string;
+  analisis_concentracion: string;
   cauciones: string | null;
+  oportunidades: string[];
   recomendaciones: string[];
   alertas: string[];
   sesgo: string;
@@ -847,78 +850,104 @@ export default function ReportesPage() {
               </div>
             )}
             {iaData && (
-              <div>
-                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--text2)', marginBottom: '6px' }}>Sesgo</div>
-                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: SESGO_COLOR[iaData.sesgo] || 'var(--text)' }}>{iaData.sesgo}</div>
-                  </div>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--text2)', marginBottom: '6px' }}>Confianza</div>
-                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: CONFIANZA_COLOR[iaData.confianza] || 'var(--text)' }}>{iaData.confianza}</div>
-                  </div>
-                  <div style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.08) 0%, rgba(167,139,250,0.05) 100%)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', padding: '12px', textAlign: 'center', gridColumn: isMobile ? '1 / -1' : 'auto' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--violet-light)', marginBottom: '6px' }}>Modelo</div>
-                    <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--violet-light)' }}>Llama 3.3 70B</div>
-                  </div>
-                </div>
+  <div>
+    {/* Sesgo y confianza — sin modelo */}
+    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text2)', marginBottom: '6px' }}>Sesgo de mercado</div>
+        <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: SESGO_COLOR[iaData.sesgo] || 'var(--text)' }}>{iaData.sesgo}</div>
+      </div>
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text2)', marginBottom: '6px' }}>Confianza del análisis</div>
+        <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '16px', color: CONFIANZA_COLOR[iaData.confianza] || 'var(--text)' }}>{iaData.confianza}</div>
+      </div>
+    </div>
 
-                <div style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--violet-light)', marginBottom: '8px' }}>Resumen ejecutivo</div>
-                  <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.7', fontFamily: 'DM Sans, sans-serif' }}>{iaData.resumen_ejecutivo}</div>
-                </div>
+    {/* Resumen ejecutivo */}
+    <div style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: '8px', padding: '16px', marginBottom: '12px' }}>
+      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--violet-light)', marginBottom: '8px' }}>📋 Resumen ejecutivo</div>
+      <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.7', fontFamily: 'DM Sans, sans-serif' }}>{iaData.resumen_ejecutivo}</div>
+    </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>📊 Rendimiento</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.analisis_rendimiento}</div>
-                  </div>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>🛡️ Riesgo</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.analisis_riesgo}</div>
-                  </div>
-                </div>
+    {/* Contexto de mercado */}
+    {iaData.contexto_mercado && (
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>🌍 Contexto de mercado</div>
+        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.contexto_mercado}</div>
+      </div>
+    )}
 
-                {iaData.cauciones && (
-                  <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--amber)', marginBottom: '8px' }}>🔒 Cauciones</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.cauciones}</div>
-                  </div>
-                )}
+    {/* Rendimiento y Riesgo */}
+    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>📊 Análisis de rendimiento</div>
+        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.analisis_rendimiento}</div>
+      </div>
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>🛡️ Análisis de riesgo</div>
+        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.analisis_riesgo}</div>
+      </div>
+    </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--green)', marginBottom: '10px' }}>💡 Recomendaciones</div>
-                    {iaData.recomendaciones.map((r, i) => (
-                      <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
-                        <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px', color: 'var(--green)', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>{i + 1}</div>
-                        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{r}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--red)', marginBottom: '10px' }}>⚠️ Alertas</div>
-                    {iaData.alertas.filter(a => a).map((a, i) => (
-                      <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
-                        <AlertTriangle size={16} style={{ color: 'var(--amber)', flexShrink: 0, marginTop: '2px' }} />
-                        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{a}</div>
-                      </div>
-                    ))}
-                    {iaData.alertas.filter(a => a).length === 0 && (
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <CheckCircle size={16} style={{ color: 'var(--green)' }} />
-                        <span style={{ fontSize: '13px', color: 'var(--muted2)' }}>Sin alertas relevantes</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+    {/* Concentración */}
+    {iaData.analisis_concentracion && (
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>🎯 Concentración y diversificación</div>
+        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.analisis_concentracion}</div>
+      </div>
+    )}
 
-                <button onClick={() => { setIAData(null); setIAError(null); }}
-                  style={{ marginTop: '12px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted2)', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <RefreshCw size={13} /> Regenerar análisis
-                </button>
-              </div>
-            )}
+    {/* Cauciones */}
+    {iaData.cauciones && (
+      <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--amber)', marginBottom: '8px' }}>🔒 Cauciones</div>
+        <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{iaData.cauciones}</div>
+      </div>
+    )}
+
+    {/* Oportunidades + Recomendaciones */}
+    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+      {iaData.oportunidades?.length > 0 && (
+        <div style={{ background: 'rgba(34,197,94,0.04)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '8px', padding: '14px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--green)', marginBottom: '10px' }}>🚀 Oportunidades detectadas</div>
+          {iaData.oportunidades.map((o, i) => (
+            <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+              <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px', color: 'var(--green)', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>{i + 1}</div>
+              <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{o}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--violet-light)', marginBottom: '10px' }}>💡 Recomendaciones</div>
+        {iaData.recomendaciones.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+            <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px', color: 'var(--violet-light)', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>{i + 1}</div>
+            <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{r}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Alertas */}
+    {iaData.alertas.filter(a => a).length > 0 && (
+      <div style={{ background: 'rgba(244,63,94,0.04)', border: '1px solid rgba(244,63,94,0.15)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--red)', marginBottom: '10px' }}>⚠️ Alertas y riesgos</div>
+        {iaData.alertas.filter(a => a).map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+            <AlertTriangle size={16} style={{ color: 'var(--amber)', flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: '1.6', fontFamily: 'DM Sans, sans-serif' }}>{a}</div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    <button onClick={() => { setIAData(null); setIAError(null); }}
+      style={{ marginTop: '4px', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted2)', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <RefreshCw size={13} /> Regenerar análisis
+    </button>
+  </div>
+)}
           </div>
         </>
       )}
