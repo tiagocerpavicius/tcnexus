@@ -68,6 +68,7 @@ interface PosicionActivo {
   dividendos: number;
   tipo: string;
   broker: string;
+  fechaPrimeraCompra: string | null;
 }
 
 interface ReporteData {
@@ -101,6 +102,7 @@ interface HistoricoInfo {
   precioInicio: number | null;
   precioActual: number | null;
   retornoPeriodo: number | null;
+  usoCostoPromedio: boolean;
 }
 
 interface IAData {
@@ -217,9 +219,9 @@ export default function ReportesPage() {
             return;
           }
 
+          // Fallback: ticker sin D en ARS → dividir por MEP
           const res2 = await fetch(`/api/buscar?ticker=${pos.ticker}`);
           const data2 = await res2.json();
-
           if (!data2.error) {
             const precioARS = data2.precio?.valor ?? data2.precio ?? null;
             const precioUSD = precioARS != null ? precioARS / mepActual : null;
@@ -245,6 +247,7 @@ export default function ReportesPage() {
     const historicosMap: Record<string, HistoricoInfo> = {};
     const range = RANGE_MAP[periodoActual] || '1y';
 
+    // Traer MEP histórico
     let mepHistorico: { fecha: string; venta: number }[] = [];
     try {
       const mepRes = await fetch('/api/historico-mep');
@@ -263,14 +266,31 @@ export default function ReportesPage() {
       posiciones.map(async pos => {
         try {
           if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
-            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false };
             return;
           }
 
+          // Determinar si usar costo promedio como base
+          // Si la primera compra fue DESPUÉS del inicio del período → usar costoPromedio
+          const compraDentroDelPeriodo = pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio;
+
+          if (compraDentroDelPeriodo) {
+            // No necesitamos histórico — el precio base es el costo promedio
+            // El precio actual viene de cargarPrecios
+            historicosMap[pos.ticker] = {
+              precioInicio: pos.costoPromedio,
+              precioActual: null, // se calcula con precios actuales
+              retornoPeriodo: null, // se calcula después con precio actual
+              usoCostoPromedio: true,
+            };
+            return;
+          }
+
+          // Si la compra fue ANTES del inicio → buscar precio histórico al inicio del período
           let hist: { fecha: string; cierre: number }[] = [];
 
           if (pos.tipo === 'cedear') {
-            // Intento 1: ARS con .BA → convertir con MEP histórico
+            // Intento 1: ARS con .BA → dividir por MEP histórico
             try {
               const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
               const data = await res.json();
@@ -313,25 +333,33 @@ export default function ReportesPage() {
           }
 
           if (!hist.length) {
-            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+            // Sin histórico → usar costo promedio como fallback
+            historicosMap[pos.ticker] = {
+              precioInicio: pos.costoPromedio,
+              precioActual: null,
+              retornoPeriodo: null,
+              usoCostoPromedio: true,
+            };
             return;
           }
 
-          // Precio al inicio del período
+          // Precio al inicio del período desde histórico
           const precioInicioEntry = [...hist].filter(h => h.fecha <= fechaInicio).at(-1) || hist[0];
           const precioInicio = precioInicioEntry?.cierre ?? null;
-
-          // Precio actual — último dato
           const precioActualHist = hist.at(-1)?.cierre ?? null;
 
-          // Rendimiento del período para este ticker
           const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
             ? ((precioActualHist - precioInicio) / precioInicio) * 100
             : null;
 
-          historicosMap[pos.ticker] = { precioInicio, precioActual: precioActualHist, retornoPeriodo };
+          historicosMap[pos.ticker] = {
+            precioInicio,
+            precioActual: precioActualHist,
+            retornoPeriodo,
+            usoCostoPromedio: false,
+          };
         } catch {
-          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false };
         }
       })
     );
@@ -349,9 +377,9 @@ export default function ReportesPage() {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
         return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
       }, 0);
-      const capitalActual = capitalActivo + reporte.interesesCauciones + efectivo;
+      const capitalActualIA = capitalActivo + reporte.interesesCauciones + efectivo;
       const retornoPeriodoIA = reporte.capitalInicial > 0
-        ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
+        ? (capitalActualIA - reporte.capitalInicial) / reporte.capitalInicial * 100
         : null;
       const sharpeIA = reporte.volatilidad && reporte.volatilidad > 0 && retornoPeriodoIA != null
         ? +((retornoPeriodoIA - 4.5) / reporte.volatilidad).toFixed(2)
@@ -376,7 +404,7 @@ export default function ReportesPage() {
           fechaInicio: reporte.fechaInicio,
           fechaFin: reporte.fechaFin,
           capitalInicial: reporte.capitalInicial,
-          capitalActual,
+          capitalActual: capitalActualIA,
           retornoPeriodo: retornoPeriodoIA,
           retornoTotal: retornoPeriodoIA,
           volatilidad: reporte.volatilidad,
@@ -414,21 +442,34 @@ export default function ReportesPage() {
 
   const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0) + efectivo;
 
-  // Retorno del período usando históricos de precios ponderados por valor
+  // Retorno del período ponderado por valor usando precio inicio correcto
   const retornoPeriodo = (() => {
     if (!reporte || Object.keys(historicos).length === 0) return null;
     let valorInicio = 0;
     let valorActual = 0;
     let posicionesConDatos = 0;
+
     reporte.performancePorActivo.forEach(pos => {
       const hist = historicos[pos.ticker];
       const precioActual = precios[pos.ticker]?.precio ?? null;
-      if (hist?.precioInicio && precioActual) {
-        valorInicio += hist.precioInicio * pos.cantidad;
+      if (!hist || precioActual == null) return;
+
+      let precioBase: number | null = null;
+      if (hist.usoCostoPromedio) {
+        // Compra dentro del período → base es costo promedio
+        precioBase = pos.costoPromedio;
+      } else {
+        // Compra antes del período → base es precio histórico al inicio
+        precioBase = hist.precioInicio;
+      }
+
+      if (precioBase && precioBase > 0) {
+        valorInicio += precioBase * pos.cantidad;
         valorActual += precioActual * pos.cantidad;
         posicionesConDatos++;
       }
     });
+
     if (posicionesConDatos === 0 || valorInicio === 0) return null;
     return ((valorActual - valorInicio) / valorInicio) * 100;
   })();
@@ -454,6 +495,7 @@ export default function ReportesPage() {
     }))
     .sort((a, b) => b.valor - a.valor);
 
+  // perfData con retornoPeriodo correcto por activo
   const perfData = reporte
     ? reporte.performancePorActivo.map(pos => {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
@@ -463,7 +505,17 @@ export default function ReportesPage() {
         const plPctTotal = plPrecio != null && pos.costoTotal > 0
           ? (plPrecio / pos.costoTotal) * 100
           : null;
-        const retPeriodo = historicos[pos.ticker]?.retornoPeriodo ?? null;
+
+        // Retorno del período: precio actual vs precio base correcto
+        const hist = historicos[pos.ticker];
+        let retPeriodo: number | null = null;
+        if (hist && precioUSD) {
+          const precioBase = hist.usoCostoPromedio ? pos.costoPromedio : hist.precioInicio;
+          if (precioBase && precioBase > 0) {
+            retPeriodo = ((precioUSD - precioBase) / precioBase) * 100;
+          }
+        }
+
         return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPctTotal, retPeriodo };
       }).sort((a, b) => (b.retPeriodo ?? b.plPctTotal ?? 0) - (a.retPeriodo ?? a.plPctTotal ?? 0))
     : [];
@@ -614,7 +666,7 @@ export default function ReportesPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>🏆 Performance por activo</div>
                 <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
-                  {histLoaded ? `rendimiento ${periodoLabel().toLowerCase()}` : 'cargando históricos...'}
+                  {histLoaded ? `rendimiento ${periodoLabel().toLowerCase()}` : 'cargando...'}
                 </div>
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
