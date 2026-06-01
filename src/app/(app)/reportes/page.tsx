@@ -55,8 +55,8 @@ const RANGE_MAP: Record<string, string> = {
   semanal:   '1mo',
   mensual:   '3mo',
   anual:     '1y',
-  historico: '5y',
-  custom:    '5y',
+  historico: '1y',
+  custom:    '1y',
 };
 
 interface PosicionActivo {
@@ -169,7 +169,7 @@ export default function ReportesPage() {
       if (tickersBase.length) {
         cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
-        (data.performancePorActivo, data.fechaInicio, data.mep, periodo);
+        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep, periodo);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -190,216 +190,154 @@ export default function ReportesPage() {
   }
 
   async function cargarPrecios(posiciones: PosicionActivo[], mepActual: number) {
-  const preciosMap: Record<string, PrecioInfo> = {};
-  await Promise.all(
-    posiciones.map(async pos => {
-      try {
-        // Intento 1: ticker con D (precio USD directo de IOL)
-        const res1 = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
-        const data1 = await res1.json();
+    const preciosMap: Record<string, PrecioInfo> = {};
+    await Promise.all(
+      posiciones.map(async pos => {
+        try {
+          const res1 = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
+          const data1 = await res1.json();
 
-        if (!data1.error) {
-          let precio: number | null = null;
-          let moneda = 'USD';
-          if (data1.tipo === 'cedear') {
-            precio = data1.precio?.valor ?? null;
-            moneda = data1.precio?.moneda || 'ARS';
-          } else if (data1.tipo === 'renta_variable') {
-            precio = data1.precio ?? null;
-            moneda = data1.monedaLabel || 'USD';
-          } else if (data1.tipo === 'renta_fija') {
-            precio = data1.precio?.valor ?? null;
-            moneda = data1.monedaLabel || 'USD';
+          if (!data1.error) {
+            let precio: number | null = null;
+            let moneda = 'USD';
+            if (data1.tipo === 'cedear') {
+              precio = data1.precio?.valor ?? null;
+              moneda = data1.precio?.moneda || 'ARS';
+            } else if (data1.tipo === 'renta_variable') {
+              precio = data1.precio ?? null;
+              moneda = data1.monedaLabel || 'USD';
+            } else if (data1.tipo === 'renta_fija') {
+              precio = data1.precio?.valor ?? null;
+              moneda = data1.monedaLabel || 'USD';
+            }
+            const precioUSD = precio != null
+              ? (moneda === 'ARS' ? precio / mepActual : precio)
+              : null;
+            preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+            return;
           }
-          const precioUSD = precio != null
-            ? (moneda === 'ARS' ? precio / mepActual : precio)
-            : null;
-          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
-          return;
+
+          const res2 = await fetch(`/api/buscar?ticker=${pos.ticker}`);
+          const data2 = await res2.json();
+
+          if (!data2.error) {
+            const precioARS = data2.precio?.valor ?? data2.precio ?? null;
+            const precioUSD = precioARS != null ? precioARS / mepActual : null;
+            preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
+            return;
+          }
+
+          preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
+        } catch {
+          preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
         }
-
-        // Intento 2: ticker sin D en ARS → dividir por MEP
-        const res2 = await fetch(`/api/buscar?ticker=${pos.ticker}`);
-        const data2 = await res2.json();
-
-        if (!data2.error) {
-          // Siempre viene en ARS cuando usamos sin D
-          const precioARS = data2.precio?.valor ?? data2.precio ?? null;
-          const precioUSD = precioARS != null ? precioARS / mepActual : null;
-          preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
-          return;
-        }
-
-        preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
-      } catch {
-        preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
-      }
-    })
-  );
-  setPrecios(preciosMap);
-}
+      })
+    );
+    setPrecios(preciosMap);
+  }
 
   async function cargarHistoricos(
-  posiciones: PosicionActivo[],
-  fechaInicio: string,
-  mepActual: number,
-  periodoActual: string
-) {
-  const historicosMap: Record<string, HistoricoInfo> = {};
-  const range = RANGE_MAP[periodoActual] || '1y';
+    posiciones: PosicionActivo[],
+    fechaInicio: string,
+    mepActual: number,
+    periodoActual: string
+  ) {
+    const historicosMap: Record<string, HistoricoInfo> = {};
+    const range = RANGE_MAP[periodoActual] || '1y';
 
-  // Traer histórico del MEP una sola vez para todos los tickers
-  let mepHistorico: { fecha: string; venta: number }[] = [];
-  try {
-    const mepRes = await fetch('/api/historico-mep');
-    const mepData = await mepRes.json();
-    if (Array.isArray(mepData)) {
-      mepHistorico = mepData.map((d: any) => ({ fecha: d.fecha, venta: d.venta }));
-    }
-  } catch {}
-
-  // Función para obtener MEP de una fecha específica
-  const getMepFecha = (fecha: string): number => {
-    const entry = [...mepHistorico]
-      .filter(m => m.fecha <= fecha)
-      .at(-1);
-    return entry?.venta || mepActual;
-  };
-
-    // Debug temporal
-console.log('MEP historico cargado:', mepHistorico.length, 'entradas');
-console.log('MEP para 2026-04-30:', getMepFecha('2026-04-30'));
-console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
-
-  await Promise.all(
-    posiciones.map(async pos => {
-      try {
-        if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
-          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
-          return;
-        }
-
-        let hist: { fecha: string; cierre: number }[] = [];
-
-        if (pos.tipo === 'cedear') {
-          // Intento 1: CEDEAR en ARS con suffix .BA → convertir a USD con MEP histórico
-          try {
-            // Ticker sin D para ARS en Yahoo .BA
-            const tickerARS = pos.ticker; // sin D
-            const res = await fetch(
-              `/api/historico?ticker=${tickerARS}&suffix=.BA&range=${range}&interval=1d`
-            );
-            const data = await res.json();
-            if (data.historico?.length > 1) {
-              // Convertir cada precio ARS a USD usando MEP de esa fecha
-              hist = data.historico.map((h: any) => ({
-                fecha: h.fecha,
-                cierre: mepHistorico.length > 0
-                  ? h.cierre / getMepFecha(h.fecha)
-                  : h.cierre / mepActual,
-              }));
-            }
-          } catch {}
-
-          // Intento 2: fallback con ticker+D suffix .BA (precio ya en USD)
-          if (!hist.length) {
-            try {
-              const res = await fetch(
-                `/api/historico?ticker=${pos.tickerBuscar}&suffix=.BA&range=${range}&interval=1d`
-              );
-              const data = await res.json();
-              if (data.historico?.length > 1) {
-                hist = data.historico;
-              }
-            } catch {}
-          }
-
-          // Intento 3: fallback Yahoo US sin suffix
-          if (!hist.length) {
-            try {
-              const res = await fetch(
-                `/api/historico?ticker=${pos.ticker}&suffix=&range=${range}&interval=1d`
-              );
-              const data = await res.json();
-              if (data.historico?.length > 1) {
-                hist = data.historico;
-              }
-            } catch {}
-          }
-        } else if (pos.tipo === 'accion_ar') {
-          // Acciones AR: Yahoo con suffix .BA en ARS → convertir a USD
-          try {
-            const res = await fetch(
-              `/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`
-            );
-            const data = await res.json();
-            if (data.historico?.length > 1) {
-              hist = data.historico.map((h: any) => ({
-                fecha: h.fecha,
-                cierre: mepHistorico.length > 0
-                  ? h.cierre / getMepFecha(h.fecha)
-                  : h.cierre / mepActual,
-              }));
-            }
-          } catch {}
-        }
-
-        if (!hist.length) {
-          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
-          return;
-        }
-
-        // Precio al inicio del período
-        const precioInicioEntry = [...hist]
-          .filter(h => h.fecha <= fechaInicio)
-          .at(-1) || hist[0];
-        const precioInicio = precioInicioEntry?.cierre ?? null;
-
-        // Precio actual — último dato
-        const precioActualHist = hist.at(-1)?.cierre ?? null;
-
-        const retornoPeriodo = (() => {
-  if (!reporte || Object.keys(historicos).length === 0) return null;
-
-  let valorInicio = 0;
-  let valorActual = 0;
-  let posicionesConDatos = 0;
-
-  reporte.performancePorActivo.forEach(pos => {
-    const hist = historicos[pos.ticker];
-    const precioActual = precios[pos.ticker]?.precio ?? null;
-    if (hist?.precioInicio && precioActual) {
-      valorInicio += hist.precioInicio * pos.cantidad;
-      valorActual += precioActual * pos.cantidad;
-      posicionesConDatos++;
-    }
-  });
-
-  if (posicionesConDatos === 0 || valorInicio === 0) return null;
-  return ((valorActual - valorInicio) / valorInicio) * 100;
-})();
-
-        historicosMap[pos.ticker] = {
-          precioInicio,
-          precioActual: precioActualHist,
-          retornoPeriodo,
-        };
-      } catch {
-        historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+    let mepHistorico: { fecha: string; venta: number }[] = [];
+    try {
+      const mepRes = await fetch('/api/historico-mep');
+      const mepData = await mepRes.json();
+      if (Array.isArray(mepData)) {
+        mepHistorico = mepData.map((d: any) => ({ fecha: d.fecha, venta: d.venta }));
       }
-    })
-  );
+    } catch {}
 
-     // Debug temporal
-  console.log('Historicos calculados:', 
-    Object.entries(historicosMap).map(([t, h]) => 
-      `${t}: inicio=${h.precioInicio?.toFixed(2)} actual=${h.precioActual?.toFixed(2)} ret=${h.retornoPeriodo?.toFixed(2)}`
-    )
-  );
+    const getMepFecha = (fecha: string): number => {
+      const entry = [...mepHistorico].filter(m => m.fecha <= fecha).at(-1);
+      return entry?.venta || mepActual;
+    };
 
-    
-  setHistoricos(historicosMap);
-}
+    await Promise.all(
+      posiciones.map(async pos => {
+        try {
+          if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
+            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+            return;
+          }
+
+          let hist: { fecha: string; cierre: number }[] = [];
+
+          if (pos.tipo === 'cedear') {
+            // Intento 1: ARS con .BA → convertir con MEP histórico
+            try {
+              const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
+              const data = await res.json();
+              if (data.historico?.length > 1) {
+                hist = data.historico.map((h: any) => ({
+                  fecha: h.fecha,
+                  cierre: h.cierre / getMepFecha(h.fecha),
+                }));
+              }
+            } catch {}
+
+            // Intento 2: ticker+D .BA (USD directo)
+            if (!hist.length) {
+              try {
+                const res = await fetch(`/api/historico?ticker=${pos.tickerBuscar}&suffix=.BA&range=${range}&interval=1d`);
+                const data = await res.json();
+                if (data.historico?.length > 1) hist = data.historico;
+              } catch {}
+            }
+
+            // Intento 3: Yahoo US sin suffix
+            if (!hist.length) {
+              try {
+                const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=&range=${range}&interval=1d`);
+                const data = await res.json();
+                if (data.historico?.length > 1) hist = data.historico;
+              } catch {}
+            }
+          } else if (pos.tipo === 'accion_ar') {
+            try {
+              const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
+              const data = await res.json();
+              if (data.historico?.length > 1) {
+                hist = data.historico.map((h: any) => ({
+                  fecha: h.fecha,
+                  cierre: h.cierre / getMepFecha(h.fecha),
+                }));
+              }
+            } catch {}
+          }
+
+          if (!hist.length) {
+            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+            return;
+          }
+
+          // Precio al inicio del período
+          const precioInicioEntry = [...hist].filter(h => h.fecha <= fechaInicio).at(-1) || hist[0];
+          const precioInicio = precioInicioEntry?.cierre ?? null;
+
+          // Precio actual — último dato
+          const precioActualHist = hist.at(-1)?.cierre ?? null;
+
+          // Rendimiento del período para este ticker
+          const retornoPeriodo = precioInicio && precioActualHist && precioInicio > 0
+            ? ((precioActualHist - precioInicio) / precioInicio) * 100
+            : null;
+
+          historicosMap[pos.ticker] = { precioInicio, precioActual: precioActualHist, retornoPeriodo };
+        } catch {
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null };
+        }
+      })
+    );
+
+    setHistoricos(historicosMap);
+  }
 
   async function generarIA() {
     if (!reporte) return;
@@ -412,11 +350,11 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
         return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
       }, 0);
       const capitalActual = capitalActivo + reporte.interesesCauciones + efectivo;
-      const retornoPeriodo = reporte.capitalInicial > 0
+      const retornoPeriodoIA = reporte.capitalInicial > 0
         ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
         : null;
-      const sharpe = reporte.volatilidad && reporte.volatilidad > 0 && retornoPeriodo != null
-        ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
+      const sharpeIA = reporte.volatilidad && reporte.volatilidad > 0 && retornoPeriodoIA != null
+        ? +((retornoPeriodoIA - 4.5) / reporte.volatilidad).toFixed(2)
         : null;
 
       const expSectorial: Record<string, number> = {};
@@ -439,11 +377,11 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
           fechaFin: reporte.fechaFin,
           capitalInicial: reporte.capitalInicial,
           capitalActual,
-          retornoPeriodo,
-          retornoTotal: retornoPeriodo,
+          retornoPeriodo: retornoPeriodoIA,
+          retornoTotal: retornoPeriodoIA,
           volatilidad: reporte.volatilidad,
           maxDrawdown: reporte.maxDrawdown,
-          sharpe,
+          sharpe: sharpeIA,
           performancePorActivo: reporte.performancePorActivo,
           exposicionSectorial: expPct,
           capitalCaucionado: reporte.capitalCaucionado,
@@ -476,9 +414,24 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
 
   const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0) + efectivo;
 
-  const retornoPeriodo = reporte && reporte.capitalInicial > 0
-    ? (capitalActual - reporte.capitalInicial) / reporte.capitalInicial * 100
-    : null;
+  // Retorno del período usando históricos de precios ponderados por valor
+  const retornoPeriodo = (() => {
+    if (!reporte || Object.keys(historicos).length === 0) return null;
+    let valorInicio = 0;
+    let valorActual = 0;
+    let posicionesConDatos = 0;
+    reporte.performancePorActivo.forEach(pos => {
+      const hist = historicos[pos.ticker];
+      const precioActual = precios[pos.ticker]?.precio ?? null;
+      if (hist?.precioInicio && precioActual) {
+        valorInicio += hist.precioInicio * pos.cantidad;
+        valorActual += precioActual * pos.cantidad;
+        posicionesConDatos++;
+      }
+    });
+    if (posicionesConDatos === 0 || valorInicio === 0) return null;
+    return ((valorActual - valorInicio) / valorInicio) * 100;
+  })();
 
   const sharpe = reporte?.volatilidad && reporte.volatilidad > 0 && retornoPeriodo != null
     ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
@@ -534,7 +487,6 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
 
   return (
     <div style={{ maxWidth: '1100px' }}>
-
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h1 style={{ fontFamily: 'Syne, sans-serif', fontSize: isMobile ? '20px' : '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>Reportes</h1>
@@ -622,7 +574,7 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
 
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${isMobile ? 2 : 5}, 1fr)`, gap: '10px', marginBottom: '16px' }}>
             {[
-              { label: 'Retorno período', value: fmtPct(retornoPeriodo), color: colorV(retornoPeriodo) },
+              { label: 'Retorno período', value: retornoPeriodo != null ? fmtPct(retornoPeriodo) : '...', color: colorV(retornoPeriodo) },
               { label: 'Capital actual', value: fmtUSD(capitalActual), color: 'var(--violet-light)' },
               { label: 'Capital inicial', value: fmtUSD(reporte.capitalInicial), color: 'var(--text)' },
               { label: 'Liquidez', value: fmtUSD(efectivo), color: '#06b6d4' },
