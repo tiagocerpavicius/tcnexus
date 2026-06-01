@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     const fechaInicio = getFechaInicio(periodo, fechaCustomInicio);
     const fechaFin = fechaCustomFin || new Date().toISOString().split('T')[0];
 
-    // 1. Operaciones del usuario hasta fechaFin
+    // 1. Operaciones
     const { data: ops, error: opsError } = await supabase
       .from('operaciones')
       .select('*')
@@ -87,12 +87,12 @@ export async function POST(request: NextRequest) {
       .select('*')
       .eq('user_id', user_id);
 
-    // 3. Capital inicial (depósitos netos históricos)
+    // 3. Capital inicial
     const depositos = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const capitalInicial = depositos - retiros;
 
-    // 4. Ops dentro del período
+    // 4. Ops del período
     const opsPeriodo = ops.filter(o => o.fecha >= fechaInicio && o.fecha <= fechaFin);
     const depositosPeriodo = opsPeriodo.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const retirosPeriodo = opsPeriodo.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
@@ -102,6 +102,9 @@ export async function POST(request: NextRequest) {
     const posiciones = new Map<string, {
       cantidad: number; costoTotal: number; tipo: string; broker: string; moneda: string;
     }>();
+
+    // Mapa de primera compra por ticker
+    const primeraCompraPorTicker: Record<string, string> = {};
 
     const sorted = [...ops].sort((a, b) => {
       const d = a.fecha.localeCompare(b.fecha);
@@ -117,6 +120,11 @@ export async function POST(request: NextRequest) {
       const t = op.ticker?.toUpperCase();
       if (!t || op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'dividendo') continue;
       const key = t.endsWith('D') && t.length > 2 ? t.slice(0, -1) : t;
+
+      // Registrar primera compra
+      if (op.tipo === 'compra' && !primeraCompraPorTicker[key]) {
+        primeraCompraPorTicker[key] = op.fecha;
+      }
 
       if (!posiciones.has(key)) {
         posiciones.set(key, {
@@ -154,7 +162,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 6. Dividendos por ticker
+    // 6. Dividendos
     const dividendosPeriodo = opsPeriodo
       .filter(o => o.tipo === 'dividendo')
       .reduce((s, o) => s + (o.monto_usd || 0), 0);
@@ -181,9 +189,10 @@ export async function POST(request: NextRequest) {
         dividendos: dividendosPorTicker[ticker] || 0,
         tipo: pos.tipo,
         broker: pos.broker,
+        fechaPrimeraCompra: primeraCompraPorTicker[ticker] || null,
       }));
 
-    // 8. Cauciones métricas
+    // 8. Cauciones
     const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
     const capitalCaucionado = (cauciones || []).reduce((s, c) => s + (c.monto || 0), 0);
     const tnasValidas = (cauciones || []).filter((c: any) => c.tna).map((c: any) => c.tna);
@@ -191,7 +200,7 @@ export async function POST(request: NextRequest) {
       ? tnasValidas.reduce((a: number, b: number) => a + b, 0) / tnasValidas.length
       : null;
 
-    // 9. Efectivo disponible
+    // 9. Efectivo
     let efectivoUSD = 0;
     for (const op of ops) {
       if (op.tipo === 'deposito') efectivoUSD += op.monto_usd || 0;
@@ -202,7 +211,7 @@ export async function POST(request: NextRequest) {
     }
     efectivoUSD = Math.max(0, efectivoUSD);
 
-    // 10. Historial de capital por fecha (depósitos acumulados)
+    // 10. Historial de capital
     let acumDepositos = 0;
     const historialCapital: { fecha: string; valor: number }[] = [];
     const fechasUnicas = Array.from(new Set(ops.map(o => o.fecha))).sort();
