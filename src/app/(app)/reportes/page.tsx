@@ -103,6 +103,7 @@ interface HistoricoInfo {
   precioActual: number | null;
   retornoPeriodo: number | null;
   usoCostoPromedio: boolean;
+  histCompleto: { fecha: string; cierre: number }[];
 }
 
 interface IAData {
@@ -198,7 +199,6 @@ export default function ReportesPage() {
         try {
           const res1 = await fetch(`/api/buscar?ticker=${pos.tickerBuscar}`);
           const data1 = await res1.json();
-
           if (!data1.error) {
             let precio: number | null = null;
             let moneda = 'USD';
@@ -212,14 +212,10 @@ export default function ReportesPage() {
               precio = data1.precio?.valor ?? null;
               moneda = data1.monedaLabel || 'USD';
             }
-            const precioUSD = precio != null
-              ? (moneda === 'ARS' ? precio / mepActual : precio)
-              : null;
+            const precioUSD = precio != null ? (moneda === 'ARS' ? precio / mepActual : precio) : null;
             preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
             return;
           }
-
-          // Fallback: ticker sin D en ARS → dividir por MEP
           const res2 = await fetch(`/api/buscar?ticker=${pos.ticker}`);
           const data2 = await res2.json();
           if (!data2.error) {
@@ -228,7 +224,6 @@ export default function ReportesPage() {
             preciosMap[pos.ticker] = { precio: precioUSD, moneda: 'USD' };
             return;
           }
-
           preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
         } catch {
           preciosMap[pos.ticker] = { precio: null, moneda: 'USD' };
@@ -247,7 +242,6 @@ export default function ReportesPage() {
     const historicosMap: Record<string, HistoricoInfo> = {};
     const range = RANGE_MAP[periodoActual] || '1y';
 
-    // Traer MEP histórico
     let mepHistorico: { fecha: string; venta: number }[] = [];
     try {
       const mepRes = await fetch('/api/historico-mep');
@@ -266,31 +260,26 @@ export default function ReportesPage() {
       posiciones.map(async pos => {
         try {
           if (pos.tipo === 'bono' || pos.tipo === 'efectivo') {
-            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false };
+            historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false, histCompleto: [] };
             return;
           }
 
-          // Determinar si usar costo promedio como base
-          // Si la primera compra fue DESPUÉS del inicio del período → usar costoPromedio
           const compraDentroDelPeriodo = pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio;
 
           if (compraDentroDelPeriodo) {
-            // No necesitamos histórico — el precio base es el costo promedio
-            // El precio actual viene de cargarPrecios
             historicosMap[pos.ticker] = {
               precioInicio: pos.costoPromedio,
-              precioActual: null, // se calcula con precios actuales
-              retornoPeriodo: null, // se calcula después con precio actual
+              precioActual: null,
+              retornoPeriodo: null,
               usoCostoPromedio: true,
+              histCompleto: [],
             };
             return;
           }
 
-          // Si la compra fue ANTES del inicio → buscar precio histórico al inicio del período
           let hist: { fecha: string; cierre: number }[] = [];
 
           if (pos.tipo === 'cedear') {
-            // Intento 1: ARS con .BA → dividir por MEP histórico
             try {
               const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
               const data = await res.json();
@@ -302,7 +291,6 @@ export default function ReportesPage() {
               }
             } catch {}
 
-            // Intento 2: ticker+D .BA (USD directo)
             if (!hist.length) {
               try {
                 const res = await fetch(`/api/historico?ticker=${pos.tickerBuscar}&suffix=.BA&range=${range}&interval=1d`);
@@ -311,7 +299,6 @@ export default function ReportesPage() {
               } catch {}
             }
 
-            // Intento 3: Yahoo US sin suffix
             if (!hist.length) {
               try {
                 const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=&range=${range}&interval=1d`);
@@ -333,17 +320,16 @@ export default function ReportesPage() {
           }
 
           if (!hist.length) {
-            // Sin histórico → usar costo promedio como fallback
             historicosMap[pos.ticker] = {
               precioInicio: pos.costoPromedio,
               precioActual: null,
               retornoPeriodo: null,
               usoCostoPromedio: true,
+              histCompleto: [],
             };
             return;
           }
 
-          // Precio al inicio del período desde histórico
           const precioInicioEntry = [...hist].filter(h => h.fecha <= fechaInicio).at(-1) || hist[0];
           const precioInicio = precioInicioEntry?.cierre ?? null;
           const precioActualHist = hist.at(-1)?.cierre ?? null;
@@ -357,9 +343,10 @@ export default function ReportesPage() {
             precioActual: precioActualHist,
             retornoPeriodo,
             usoCostoPromedio: false,
+            histCompleto: hist,
           };
         } catch {
-          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false };
+          historicosMap[pos.ticker] = { precioInicio: null, precioActual: null, retornoPeriodo: null, usoCostoPromedio: false, histCompleto: [] };
         }
       })
     );
@@ -384,7 +371,6 @@ export default function ReportesPage() {
       const sharpeIA = reporte.volatilidad && reporte.volatilidad > 0 && retornoPeriodoIA != null
         ? +((retornoPeriodoIA - 4.5) / reporte.volatilidad).toFixed(2)
         : null;
-
       const expSectorial: Record<string, number> = {};
       reporte.performancePorActivo.forEach(pos => {
         const s = sectores[pos.ticker]?.sector || 'Otros';
@@ -395,28 +381,17 @@ export default function ReportesPage() {
       Object.entries(expSectorial).forEach(([s, v]) => {
         expPct[s] = totalCosto > 0 ? +(v / totalCosto * 100).toFixed(1) : 0;
       });
-
       const res = await fetch('/api/ai-reporte', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          periodo: reporte.periodo,
-          fechaInicio: reporte.fechaInicio,
-          fechaFin: reporte.fechaFin,
-          capitalInicial: reporte.capitalInicial,
-          capitalActual: capitalActualIA,
-          retornoPeriodo: retornoPeriodoIA,
-          retornoTotal: retornoPeriodoIA,
-          volatilidad: reporte.volatilidad,
-          maxDrawdown: reporte.maxDrawdown,
-          sharpe: sharpeIA,
-          performancePorActivo: reporte.performancePorActivo,
-          exposicionSectorial: expPct,
-          capitalCaucionado: reporte.capitalCaucionado,
-          interesesCauciones: reporte.interesesCauciones,
-          tnaPromedio: reporte.tnaPromedio,
-          dividendosPeriodo: reporte.dividendosPeriodo,
-          benchmarks: null,
+          periodo: reporte.periodo, fechaInicio: reporte.fechaInicio, fechaFin: reporte.fechaFin,
+          capitalInicial: reporte.capitalInicial, capitalActual: capitalActualIA,
+          retornoPeriodo: retornoPeriodoIA, retornoTotal: retornoPeriodoIA,
+          volatilidad: reporte.volatilidad, maxDrawdown: reporte.maxDrawdown, sharpe: sharpeIA,
+          performancePorActivo: reporte.performancePorActivo, exposicionSectorial: expPct,
+          capitalCaucionado: reporte.capitalCaucionado, interesesCauciones: reporte.interesesCauciones,
+          tnaPromedio: reporte.tnaPromedio, dividendosPeriodo: reporte.dividendosPeriodo, benchmarks: null,
         }),
       });
       const iaRes = await res.json();
@@ -442,34 +417,23 @@ export default function ReportesPage() {
 
   const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0) + efectivo;
 
-  // Retorno del período ponderado por valor usando precio inicio correcto
+  // Retorno del período ponderado
   const retornoPeriodo = (() => {
     if (!reporte || Object.keys(historicos).length === 0) return null;
     let valorInicio = 0;
     let valorActual = 0;
     let posicionesConDatos = 0;
-
     reporte.performancePorActivo.forEach(pos => {
       const hist = historicos[pos.ticker];
       const precioActual = precios[pos.ticker]?.precio ?? null;
       if (!hist || precioActual == null) return;
-
-      let precioBase: number | null = null;
-      if (hist.usoCostoPromedio) {
-        // Compra dentro del período → base es costo promedio
-        precioBase = pos.costoPromedio;
-      } else {
-        // Compra antes del período → base es precio histórico al inicio
-        precioBase = hist.precioInicio;
-      }
-
+      const precioBase = hist.usoCostoPromedio ? pos.costoPromedio : hist.precioInicio;
       if (precioBase && precioBase > 0) {
         valorInicio += precioBase * pos.cantidad;
         valorActual += precioActual * pos.cantidad;
         posicionesConDatos++;
       }
     });
-
     if (posicionesConDatos === 0 || valorInicio === 0) return null;
     return ((valorActual - valorInicio) / valorInicio) * 100;
   })();
@@ -477,6 +441,56 @@ export default function ReportesPage() {
   const sharpe = reporte?.volatilidad && reporte.volatilidad > 0 && retornoPeriodo != null
     ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
     : null;
+
+  // Gráfico de evolución del portfolio usando históricos de precios
+  const graficoEvolucion = (() => {
+    if (!reporte || Object.keys(historicos).length === 0) return [];
+
+    // Juntar todas las fechas de todos los históricos
+    const todasFechas = new Set<string>();
+    reporte.performancePorActivo.forEach(pos => {
+      const hist = historicos[pos.ticker];
+      if (hist?.histCompleto?.length) {
+        hist.histCompleto.forEach(h => todasFechas.add(h.fecha));
+      }
+    });
+
+    const fechasOrdenadas = Array.from(todasFechas).sort();
+    if (fechasOrdenadas.length < 2) return [];
+
+    // Para cada fecha calcular el valor total del portfolio
+    const puntos = fechasOrdenadas.map(fecha => {
+      let valorTotal = 0;
+      let posicionesConPrecio = 0;
+
+      reporte.performancePorActivo.forEach(pos => {
+        const hist = historicos[pos.ticker];
+        if (!hist?.histCompleto?.length) return;
+
+        // Si el activo se compró después de esta fecha, no incluirlo
+        if (pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fecha) return;
+
+        // Buscar precio más cercano a esta fecha
+        const entrada = [...hist.histCompleto].filter(h => h.fecha <= fecha).at(-1);
+        if (entrada) {
+          valorTotal += entrada.cierre * pos.cantidad;
+          posicionesConPrecio++;
+        }
+      });
+
+      return posicionesConPrecio > 0 ? { fecha, valor: +valorTotal.toFixed(2) } : null;
+    }).filter(Boolean) as { fecha: string; valor: number }[];
+
+    if (puntos.length < 2) return [];
+
+    // Calcular rendimiento acumulado % desde el inicio
+    const valorBase = puntos[0].valor;
+    return puntos.map(p => ({
+      fecha: p.fecha,
+      valor: p.valor,
+      rendimiento: valorBase > 0 ? +((p.valor - valorBase) / valorBase * 100).toFixed(2) : 0,
+    }));
+  })();
 
   const expSectorial: Record<string, number> = {};
   if (reporte) {
@@ -488,25 +502,19 @@ export default function ReportesPage() {
   const totalCostoSect = Object.values(expSectorial).reduce((a, b) => a + b, 0);
   const sectorData = Object.entries(expSectorial)
     .map(([sector, valor]) => ({
-      sector,
-      valor,
+      sector, valor,
       pct: totalCostoSect > 0 ? +(valor / totalCostoSect * 100).toFixed(1) : 0,
       color: SECTOR_COLORS[sector] || '#475569',
     }))
     .sort((a, b) => b.valor - a.valor);
 
-  // perfData con retornoPeriodo correcto por activo
   const perfData = reporte
     ? reporte.performancePorActivo.map(pos => {
         const precioUSD = precios[pos.ticker]?.precio ?? null;
         const valorActual = precioUSD != null ? precioUSD * pos.cantidad : null;
         const plPrecio = valorActual != null ? valorActual - pos.costoTotal : null;
         const plTotal = plPrecio != null ? plPrecio + pos.dividendos : null;
-        const plPctTotal = plPrecio != null && pos.costoTotal > 0
-          ? (plPrecio / pos.costoTotal) * 100
-          : null;
-
-        // Retorno del período: precio actual vs precio base correcto
+        const plPctTotal = plPrecio != null && pos.costoTotal > 0 ? (plPrecio / pos.costoTotal) * 100 : null;
         const hist = historicos[pos.ticker];
         let retPeriodo: number | null = null;
         if (hist && precioUSD) {
@@ -515,19 +523,14 @@ export default function ReportesPage() {
             retPeriodo = ((precioUSD - precioBase) / precioBase) * 100;
           }
         }
-
         return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPctTotal, retPeriodo };
       }).sort((a, b) => (b.retPeriodo ?? b.plPctTotal ?? 0) - (a.retPeriodo ?? a.plPctTotal ?? 0))
     : [];
 
   const histLoaded = Object.keys(historicos).length > 0;
 
-  const SESGO_COLOR: Record<string, string> = {
-    'Alcista': 'var(--green)', 'Neutral': 'var(--amber)', 'Bajista': 'var(--red)',
-  };
-  const CONFIANZA_COLOR: Record<string, string> = {
-    'Alta': 'var(--green)', 'Media': 'var(--amber)', 'Baja': 'var(--red)',
-  };
+  const SESGO_COLOR: Record<string, string> = { 'Alcista': 'var(--green)', 'Neutral': 'var(--amber)', 'Bajista': 'var(--red)' };
+  const CONFIANZA_COLOR: Record<string, string> = { 'Alta': 'var(--green)', 'Media': 'var(--amber)', 'Baja': 'var(--red)' };
 
   const periodoLabel = () => {
     const map: Record<string, string> = {
@@ -640,28 +643,38 @@ export default function ReportesPage() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+
+            {/* Gráfico de evolución del portfolio */}
             <div className="card">
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>📈 Evolución del capital invertido</div>
-              {reporte.historialCapital.length > 1 ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>📈 Evolución del portfolio</div>
+                {graficoEvolucion.length > 0 && (
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>rendimiento acumulado %</div>
+                )}
+              </div>
+              {graficoEvolucion.length > 1 ? (
                 <ResponsiveContainer width="100%" height={180}>
-                  <LineChart data={reporte.historialCapital} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+                  <LineChart data={graficoEvolucion} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis dataKey="fecha" tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
                       tickFormatter={v => { const d = new Date(v); return `${d.getDate()}/${d.getMonth() + 1}`; }}
                       interval="preserveStartEnd" />
                     <YAxis tick={{ fill: 'var(--muted)', fontSize: 10, fontFamily: 'DM Mono, monospace' }}
-                      tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} width={45} />
+                      tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`} width={50} />
                     <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
-                      formatter={(v: number) => [fmtUSD(v), 'Invertido']}
+                      formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, 'Rendimiento']}
                       labelFormatter={v => new Date(v).toLocaleDateString('es-AR')} />
-                    <Line type="monotone" dataKey="valor" stroke="var(--violet)" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="rendimiento" stroke="var(--violet)" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '13px' }}>Sin suficientes datos</div>
+                <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                  {histLoaded ? 'Sin suficientes datos para el gráfico' : 'Cargando...'}
+                </div>
               )}
             </div>
 
+            {/* Performance por activo */}
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>🏆 Performance por activo</div>
