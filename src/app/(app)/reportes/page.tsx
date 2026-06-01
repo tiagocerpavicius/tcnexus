@@ -169,7 +169,7 @@ export default function ReportesPage() {
       if (tickersBase.length) {
         cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
-        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep, periodo);
+        (data.performancePorActivo, data.fechaInicio, data.mep, periodo);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -389,6 +389,15 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
       }
     })
   );
+
+     // Debug temporal
+  console.log('Historicos calculados:', 
+    Object.entries(historicosMap).map(([t, h]) => 
+      `${t}: inicio=${h.precioInicio?.toFixed(2)} actual=${h.precioActual?.toFixed(2)} ret=${h.retornoPeriodo?.toFixed(2)}`
+    )
+  );
+
+    
   setHistoricos(historicosMap);
 }
 
