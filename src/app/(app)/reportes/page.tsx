@@ -258,10 +258,6 @@ export default function ReportesPage() {
     }
   } catch {}
 
-    console.log('MEP historico cargado:', mepHistorico.length, 'entradas');
-console.log('MEP para 2026-04-30:', getMepFecha('2026-04-30'));
-console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
-
   // Función para obtener MEP de una fecha específica
   const getMepFecha = (fecha: string): number => {
     const entry = [...mepHistorico]
@@ -269,6 +265,11 @@ console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
       .at(-1);
     return entry?.venta || mepActual;
   };
+
+    // Debug temporal
+console.log('MEP historico cargado:', mepHistorico.length, 'entradas');
+console.log('MEP para 2026-04-30:', getMepFecha('2026-04-30'));
+console.log('MEP para 2026-03-02:', getMepFecha('2026-03-02'));
 
   await Promise.all(
     posiciones.map(async pos => {
