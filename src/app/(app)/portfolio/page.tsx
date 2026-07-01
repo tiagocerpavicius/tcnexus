@@ -574,13 +574,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
   const fmtValSign = (usd: number | null) => { const v = conv(usd); if (v == null) return '—'; const str = verUSD ? fmtUSD(Math.abs(v)) : fmtARS(Math.abs(v)); return (usd != null && usd >= 0 ? '+' : '-') + str; };
   const fmtPrecioCol = (p: PosicionCompleta) => { if (p.precioActual == null) return '—'; if (verUSD) return fmtUSD(p.moneda === 'ARS' ? p.precioActual / mep : p.precioActual); return p.moneda === 'ARS' ? fmtARS(p.precioActual) : fmtARS(p.precioActual * mep); };
   const fmtCostoCol = (p: PosicionCompleta) => {
-    if (verUSD) {
-      if (p.moneda === 'ARS') {
-        const ars = p.costoPromedioUSD * mep;
-        return `${fmtUSD(p.costoPromedioUSD)} / ${fmtARS(ars)}`;
-      }
-      return fmtUSD(p.costoPromedioUSD);
-    }
+    if (verUSD) return fmtUSD(p.costoPromedioUSD);
     return fmtARS(p.costoPromedioUSD * mep);
   };
 
