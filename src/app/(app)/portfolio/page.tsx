@@ -363,14 +363,20 @@ function parseIOL(html: string, mep: number, mepHistory: MepHistoryEntry[] = [])
     if (esCash) {
       const row = rows[0]; const montoARS = parseIOLMonto(row['Monto']); if (!montoARS) continue;
       moneda = (row['Tipo Cuenta'] || '').toLowerCase().includes('dolar') ? 'USD' : 'ARS';
+      monto_usd = moneda === 'USD' ? montoARS : montoARS / mep;
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
-      const rate = getMepForDate(fecha, mep, mepHistory);
-      monto_usd = moneda === 'USD' ? montoARS : montoARS / rate;
     } else {
       const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
       const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
       if (usdRow) { moneda = 'USD'; monto_usd = parseIOLMonto(usdRow['Monto']); precio_unitario = parseFloat(String(usdRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(usdRow['Cant. titulos']) || null; fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']); }
-      else if (arsRow) { moneda = 'ARS'; fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']); const rate = getMepForDate(fecha, mep, mepHistory); monto_usd = parseIOLMonto(arsRow['Monto']) / rate; precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(arsRow['Cant. titulos']) || null; }
+      else if (arsRow) {
+        moneda = 'ARS';
+        fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']);
+        const rate = getMepForDate(fecha, mep, mepHistory);
+        monto_usd = parseIOLMonto(arsRow['Monto']) / rate;
+        precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null;
+        cantidad = parseFloat(arsRow['Cant. titulos']) || null;
+      }
       else { continue; }
     }
     if (!monto_usd || !fecha) continue;
@@ -421,7 +427,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     const baseRow = usdRow || arsRow; if (!baseRow) continue;
     const esUSD = !!usdRow; const importe = Math.abs((esUSD?usdRow:arsRow)!['Importe']||0); if (!importe) continue;
     const fecha = parseXLSXDate(baseRow['Concertacion']); if (!fecha) continue;
-    const rate = getMepForDate(fecha, mep, mepHistory);
+    const rate = esUSD ? 1 : getMepForDate(fecha, mep, mepHistory);
     const monto_usd = esUSD ? importe : importe / rate; const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
     const cantidad = Math.abs(baseRow['Cantidad']||0) || null; const precio = (baseRow['Precio']>0) ? baseRow['Precio'] : null;
     result.push({ importId: `BAL-${boleto}`, fecha, ticker, nombre: ticker, tipo: tipo as any, cantidad, precio_unitario: precio, monto_usd, moneda, tipo_activo: detectTipoActivo(ticker, tipoInstr), broker: 'Balanz', notas: null });
@@ -454,8 +460,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     const importe = row['Importe'] || 0;
     const monedaStr = String(row['Moneda']||'');
     const esUSD = monedaStr.includes('Dólar') || monedaStr.includes('Dollar');
-    const rate = getMepForDate(fecha, mep, mepHistory);
-    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / rate;
+    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / mep;
     const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
 
     // 1. Traspaso saliente de títulos (Transferencia Externa Débito)
@@ -469,7 +474,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     if (/^Amortizaci[oó]n\s*\/\s*.+/i.test(desc) && ticker && importe > 0) {
       const cantidad = Math.abs(row['Cantidad']||0); if (!cantidad) continue;
       const montoARS = importe; // en pesos
-      const montoParsed = montoARS / getMepForDate(fecha, mep, mepHistory);
+      const montoParsed = montoARS / mep;
       const precioUnit = cantidad > 0 ? montoARS / cantidad : null;
       result.push({ importId: `BAL-AMORT-${fecha}-${ticker}`, fecha, ticker, nombre: ticker, tipo: 'venta', cantidad, precio_unitario: precioUnit, monto_usd: montoParsed, moneda: 'ARS', tipo_activo: 'bono', broker: 'Balanz', notas: 'vencimiento' });
       continue;
