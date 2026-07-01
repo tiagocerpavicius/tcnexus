@@ -39,6 +39,9 @@ interface OpImportada {
   broker: string | null; notas: string | null;
   isDuplicate: boolean; selected: boolean;
 }
+interface MepHistoryEntry {
+  fecha: string; venta: number;
+}
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -100,6 +103,14 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
   if (AR_STOCKS.has(upper) || AR_STOCKS.has(base)) return 'accion_ar';
   if (upper.endsWith('D') && upper.length > 2 && !NO_NORMALIZAR_D.has(upper)) return 'cedear';
   return 'cedear';
+}
+
+function getMepForDate(fecha: string, fallbackMep: number, mepHistory: MepHistoryEntry[] = []): number {
+  if (!fecha) return fallbackMep;
+  const entries = [...mepHistory]
+    .filter((entry) => entry?.fecha && entry.fecha <= fecha)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+  return entries.at(-1)?.venta ?? fallbackMep;
 }
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
@@ -304,7 +315,7 @@ function parseIOLTipoMov(tipoMov: string): { tipo: 'compra'|'venta'|'dividendo'|
   return null;
 }
 
-function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
+function parseIOL(html: string, mep: number, mepHistory: MepHistoryEntry[] = []): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const table = doc.querySelector('table');
@@ -352,13 +363,14 @@ function parseIOL(html: string, mep: number): Omit<OpImportada, 'isDuplicate'|'s
     if (esCash) {
       const row = rows[0]; const montoARS = parseIOLMonto(row['Monto']); if (!montoARS) continue;
       moneda = (row['Tipo Cuenta'] || '').toLowerCase().includes('dolar') ? 'USD' : 'ARS';
-      monto_usd = moneda === 'USD' ? montoARS : montoARS / mep;
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
+      const rate = getMepForDate(fecha, mep, mepHistory);
+      monto_usd = moneda === 'USD' ? montoARS : montoARS / rate;
     } else {
       const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
       const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
       if (usdRow) { moneda = 'USD'; monto_usd = parseIOLMonto(usdRow['Monto']); precio_unitario = parseFloat(String(usdRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(usdRow['Cant. titulos']) || null; fecha = parseIOLDate(usdRow['Concert.'] || usdRow['Liquid.']); }
-      else if (arsRow) { moneda = 'ARS'; monto_usd = parseIOLMonto(arsRow['Monto']) / mep; precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(arsRow['Cant. titulos']) || null; fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']); }
+      else if (arsRow) { moneda = 'ARS'; fecha = parseIOLDate(arsRow['Concert.'] || arsRow['Liquid.']); const rate = getMepForDate(fecha, mep, mepHistory); monto_usd = parseIOLMonto(arsRow['Monto']) / rate; precio_unitario = parseFloat(String(arsRow['Precio']).replace(',','.')) || null; cantidad = parseFloat(arsRow['Cant. titulos']) || null; }
       else { continue; }
     }
     if (!monto_usd || !fecha) continue;
@@ -378,7 +390,7 @@ function parseXLSXDate(val: any): string {
   return '';
 }
 
-function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
+function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEntry[] = []): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: null });
@@ -408,9 +420,10 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     const arsRow = bRows.find(r => String(r['Moneda']||'').includes('Pesos') && Math.abs(r['Importe']||0) > 0);
     const baseRow = usdRow || arsRow; if (!baseRow) continue;
     const esUSD = !!usdRow; const importe = Math.abs((esUSD?usdRow:arsRow)!['Importe']||0); if (!importe) continue;
-    const monto_usd = esUSD ? importe : importe / mep; const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
-    const cantidad = Math.abs(baseRow['Cantidad']||0) || null; const precio = (baseRow['Precio']>0) ? baseRow['Precio'] : null;
     const fecha = parseXLSXDate(baseRow['Concertacion']); if (!fecha) continue;
+    const rate = getMepForDate(fecha, mep, mepHistory);
+    const monto_usd = esUSD ? importe : importe / rate; const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
+    const cantidad = Math.abs(baseRow['Cantidad']||0) || null; const precio = (baseRow['Precio']>0) ? baseRow['Precio'] : null;
     result.push({ importId: `BAL-${boleto}`, fecha, ticker, nombre: ticker, tipo: tipo as any, cantidad, precio_unitario: precio, monto_usd, moneda, tipo_activo: detectTipoActivo(ticker, tipoInstr), broker: 'Balanz', notas: null });
   }
 
@@ -441,7 +454,8 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     const importe = row['Importe'] || 0;
     const monedaStr = String(row['Moneda']||'');
     const esUSD = monedaStr.includes('Dólar') || monedaStr.includes('Dollar');
-    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / mep;
+    const rate = getMepForDate(fecha, mep, mepHistory);
+    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / rate;
     const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
 
     // 1. Traspaso saliente de títulos (Transferencia Externa Débito)
@@ -455,7 +469,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number): Omit<OpImportada, 'isDup
     if (/^Amortizaci[oó]n\s*\/\s*.+/i.test(desc) && ticker && importe > 0) {
       const cantidad = Math.abs(row['Cantidad']||0); if (!cantidad) continue;
       const montoARS = importe; // en pesos
-      const montoParsed = montoARS / mep;
+      const montoParsed = montoARS / getMepForDate(fecha, mep, mepHistory);
       const precioUnit = cantidad > 0 ? montoARS / cantidad : null;
       result.push({ importId: `BAL-AMORT-${fecha}-${ticker}`, fecha, ticker, nombre: ticker, tipo: 'venta', cantidad, precio_unitario: precioUnit, monto_usd: montoParsed, moneda: 'ARS', tipo_activo: 'bono', broker: 'Balanz', notas: 'vencimiento' });
       continue;
@@ -891,14 +905,14 @@ function TabOperaciones({ operaciones, onDelete, onImport }: { operaciones: Oper
 
 // ── Modal: Agregar operación ──────────────────────────────────────────────────
 
-function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => void; onSave: (op: any) => Promise<void> }) {
+function ModalAgregarOp({ mep, mepHistory, onClose, onSave }: { mep: number; mepHistory: MepHistoryEntry[]; onClose: () => void; onSave: (op: any) => Promise<void> }) {
   const [tipo, setTipo] = useState<'compra'|'venta'|'dividendo'|'deposito'|'retiro'>('compra');
   const [ticker, setTicker] = useState(''); const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [cantidad, setCantidad] = useState(''); const [precioUnitario, setPrecioUnitario] = useState('');
   const [moneda, setMoneda] = useState<'USD'|'ARS'>('USD'); const [tipoActivo, setTipoActivo] = useState('cedear');
   const [broker, setBroker] = useState(''); const [notas, setNotas] = useState(''); const [montoDirecto, setMontoDirecto] = useState(''); const [saving, setSaving] = useState(false);
   const isAssetOp = tipo==='compra'||tipo==='venta'; const isCashOp = tipo==='deposito'||tipo==='retiro'||tipo==='dividendo';
-  const calcMontoUSD = () => { if(isCashOp){const m=parseFloat(montoDirecto);return isNaN(m)?0:moneda==='ARS'?m/mep:m;} const q=parseFloat(cantidad),p=parseFloat(precioUnitario); if(isNaN(q)||isNaN(p))return 0; return moneda==='ARS'?(q*p)/mep:q*p; };
+  const calcMontoUSD = () => { if(isCashOp){const m=parseFloat(montoDirecto);return isNaN(m)?0:moneda==='ARS'?m/getMepForDate(fecha, mep, mepHistory):m;} const q=parseFloat(cantidad),p=parseFloat(precioUnitario); if(isNaN(q)||isNaN(p))return 0; return moneda==='ARS'?(q*p)/getMepForDate(fecha, mep, mepHistory):q*p; };
   const montoUSDPreview = calcMontoUSD();
   const canSave = isCashOp?parseFloat(montoDirecto)>0:ticker.trim()&&parseFloat(cantidad)>0&&parseFloat(precioUnitario)>0;
   const handleSave = async () => { const monto_usd=calcMontoUSD(); if(monto_usd<=0)return; setSaving(true); await onSave({ fecha, ticker:isAssetOp||tipo==='dividendo'?ticker.toUpperCase().trim():'EFECTIVO', nombre:isAssetOp?ticker.toUpperCase().trim():tipo==='dividendo'?ticker.toUpperCase().trim():(tipo==='deposito'?'Depósito':'Retiro'), tipo, cantidad:isAssetOp?parseFloat(cantidad)||null:null, precio_unitario:isAssetOp?parseFloat(precioUnitario)||null:null, monto_usd, moneda, tipo_activo:isAssetOp?tipoActivo:'efectivo', broker:broker||null, notas:notas||null }); setSaving(false); };
@@ -930,7 +944,7 @@ function ModalAgregarOp({ mep, onClose, onSave }: { mep: number; onClose: () => 
 
 // ── Modal: Importar desde broker ──────────────────────────────────────────────
 
-function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: { operacionesExistentes: Operacion[]; mep: number; onClose: () => void; onImport: (ops: Omit<Operacion,'id'>[]) => Promise<void> }) {
+function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, onImport }: { operacionesExistentes: Operacion[]; mep: number; mepHistory: MepHistoryEntry[]; onClose: () => void; onImport: (ops: Omit<Operacion,'id'>[]) => Promise<void> }) {
   const [broker, setBroker] = useState<'IOL'|'Balanz'>('IOL');
   const [ops, setOps] = useState<OpImportada[]>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [saving, setSaving] = useState(false); const [saved, setSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -938,8 +952,8 @@ function ModalImportarBroker({ operacionesExistentes, mep, onClose, onImport }: 
     setLoading(true); setError(''); setOps([]);
     try {
       let parsed: Omit<OpImportada,'isDuplicate'|'selected'>[] = [];
-      if (broker==='IOL') { const text = await file.text(); parsed = parseIOL(text, mep); }
-      else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep); }
+      if (broker==='IOL') { const text = await file.text(); parsed = parseIOL(text, mep, mepHistory); }
+      else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep, mepHistory); }
       if (!parsed.length) { setError('No se encontraron operaciones.'); setLoading(false); return; }
       setOps(parsed.map(op => ({ ...op, isDuplicate: isDuplicateOp(op, operacionesExistentes), selected: !isDuplicateOp(op, operacionesExistentes) })));
     } catch (e: any) { setError(e?.message||'Error al leer el archivo.'); }
@@ -1194,6 +1208,7 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [mep, setMep] = useState(1430);
+  const [mepHistory, setMepHistory] = useState<MepHistoryEntry[]>([]);
   const [tab, setTab] = useState<TabKey>('resumen');
   const [showModal, setShowModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1206,6 +1221,9 @@ export default function PortfolioPage() {
   useEffect(() => {
     fetch('/api/dolar').then(r=>r.json()).then((data:any[])=>{
       if(Array.isArray(data)){const bolsa=data.find(d=>d.casa==='bolsa');if(bolsa?.venta)setMep(bolsa.venta);}
+    }).catch(()=>{});
+    fetch('/api/historico-mep').then(r=>r.json()).then((data:any[])=>{
+      if (Array.isArray(data)) setMepHistory(data.filter((entry:any)=>entry?.fecha && typeof entry?.venta === 'number').map((entry:any)=>({ fecha: entry.fecha, venta: entry.venta })));
     }).catch(()=>{});
   }, []);
 
@@ -1381,8 +1399,8 @@ export default function PortfolioPage() {
         </>
       )}
 
-      {showModal&&(<ModalAgregarOp mep={mep} onClose={()=>setShowModal(false)} onSave={async(op)=>{const{data:{user}}=await supabase.auth.getUser();if(!user){alert('Sesión expirada.');return;}const{error}=await supabase.from('operaciones').insert({...op,user_id:user.id});if(error){alert('Error: '+error.message);return;}setShowModal(false);await loadData(true);}} />)}
-      {showImport&&(<ModalImportarBroker operacionesExistentes={operaciones} mep={mep} onClose={()=>setShowImport(false)} onImport={handleImport} />)}
+      {showModal&&(<ModalAgregarOp mep={mep} mepHistory={mepHistory} onClose={()=>setShowModal(false)} onSave={async(op)=>{const{data:{user}}=await supabase.auth.getUser();if(!user){alert('Sesión expirada.');return;}const{error}=await supabase.from('operaciones').insert({...op,user_id:user.id});if(error){alert('Error: '+error.message);return;}setShowModal(false);await loadData(true);}} />)}
+      {showImport&&(<ModalImportarBroker operacionesExistentes={operaciones} mep={mep} mepHistory={mepHistory} onClose={()=>setShowImport(false)} onImport={handleImport} />)}
       <style>{`@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}`}</style>
     </div>
   );
