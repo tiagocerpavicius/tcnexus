@@ -105,6 +105,11 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
   return 'cedear';
 }
 
+function isAmortizacionOp(op: Operacion): boolean {
+  const notes = (op.notas || '').toLowerCase();
+  return notes.includes('amort') || notes.includes('venc');
+}
+
 function getMepForDate(fecha: string, fallbackMep: number, mepHistory: MepHistoryEntry[] = []): number {
   if (!fecha) return fallbackMep;
   const today = new Date().toISOString().split('T')[0];
@@ -185,6 +190,11 @@ function calcularPosicionesBase(ops: Operacion[], fallbackMep = 1430, mepHistory
     if (op.tipo === 'compra') {
       pos.cantidad += (op.cantidad || 0);
       pos.costoTotalUSD += getOperacionMontoUSD(op, fallbackMep, mepHistory);
+    } else if (isAmortizacionOp(op) && pos.cantidad > 0) {
+      const qty = Math.min(op.cantidad || 0, pos.cantidad);
+      const pct = pos.cantidad > 0 ? qty / pos.cantidad : 0;
+      pos.costoTotalUSD *= (1 - pct);
+      pos.cantidad -= qty;
     } else if (op.tipo === 'venta' && pos.cantidad > 0) {
       const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
       pos.costoTotalUSD *= (1 - pct);
@@ -246,6 +256,11 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
 
     if (op.tipo === 'compra') {
       base.costoTotal += getOperacionMontoUSD(op, fallbackMep, mepHistory); base.cantidad += (op.cantidad || 0);
+    } else if (isAmortizacionOp(op) && base.cantidad > 0) {
+      const qty = Math.min(op.cantidad || 0, base.cantidad);
+      const pct = base.cantidad > 0 ? qty / base.cantidad : 0;
+      base.costoTotal *= (1 - pct);
+      base.cantidad -= qty;
     } else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
@@ -496,7 +511,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
       const montoARS = importe; // en pesos
       const montoParsed = montoARS / mep;
       const precioUnit = cantidad > 0 ? montoARS / cantidad : null;
-      result.push({ importId: `BAL-AMORT-${fecha}-${ticker}`, fecha, ticker, nombre: ticker, tipo: 'venta', cantidad, precio_unitario: precioUnit, monto_usd: montoParsed, moneda: 'ARS', tipo_activo: 'bono', broker: 'Balanz', notas: 'vencimiento' });
+      result.push({ importId: `BAL-AMORT-${fecha}-${ticker}`, fecha, ticker, nombre: ticker, tipo: 'venta', cantidad, precio_unitario: precioUnit, monto_usd: montoParsed, moneda: 'ARS', tipo_activo: 'bono', broker: 'Balanz', notas: 'amortizacion' });
       continue;
     }
 
@@ -1286,7 +1301,7 @@ export default function PortfolioPage() {
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos recibidos por ticker
     const rentasByTicker = new Map<string, number>();
-    for (const op of ops.filter(o => o.tipo === 'dividendo')) {
+    for (const op of ops.filter(o => o.tipo === 'dividendo' || isAmortizacionOp(o))) {
       const key = normalizarTicker(op.ticker);
       rentasByTicker.set(key, (rentasByTicker.get(key) || 0) + op.monto_usd);
     }
