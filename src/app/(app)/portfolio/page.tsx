@@ -133,6 +133,14 @@ function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number 
   return +(((Math.pow(valorActualUSD / capitalInicial, 1 / anos)) - 1) * 100).toFixed(2);
 }
 
+function getMontoUSDOperacion(op: Operacion, fallbackMep: number, mepHistory: MepHistoryEntry[] = []): number {
+  if (op.moneda === 'USD') return typeof op.monto_usd === 'number' ? op.monto_usd : 0;
+  if ((op.tipo === 'compra' || op.tipo === 'venta') && op.cantidad != null && op.precio_unitario != null && op.precio_unitario > 0) {
+    return (op.cantidad * op.precio_unitario) / getMepForDate(op.fecha, fallbackMep, mepHistory);
+  }
+  return typeof op.monto_usd === 'number' ? op.monto_usd : 0;
+}
+
 function pnlColor(pct: number | null): string {
   if (pct == null) return '#475569';
   if (pct >= 30) return '#15803d'; if (pct >= 15) return '#22c55e';
@@ -143,7 +151,7 @@ function pnlColor(pct: number | null): string {
 
 // ── Cálculos de portfolio ─────────────────────────────────────────────────────
 
-function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
+function calcularPosicionesBase(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   const transferCostPerUnit = new Map<string, number>();
 
@@ -171,7 +179,7 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
 
     if (op.tipo === 'compra') {
       pos.cantidad += (op.cantidad || 0);
-      pos.costoTotalUSD += op.monto_usd;
+      pos.costoTotalUSD += getMontoUSDOperacion(op, fallbackMep, mepHistory);
     } else if (op.tipo === 'venta' && pos.cantidad > 0) {
       const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
       pos.costoTotalUSD *= (1 - pct);
@@ -197,20 +205,21 @@ function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   return map;
 }
 
-function calcularEfectivoUSD(ops: Operacion[]): number {
+function calcularEfectivoUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): number {
   let e = 0;
   for (const op of ops) {
-    if (op.tipo === 'deposito') e += op.monto_usd;
-    else if (op.tipo === 'retiro') e -= op.monto_usd;
-    else if (op.tipo === 'compra') e -= op.monto_usd;
-    else if (op.tipo === 'venta') e += op.monto_usd;
-    else if (op.tipo === 'dividendo') e += op.monto_usd;
+    const montoUSD = getMontoUSDOperacion(op, fallbackMep, mepHistory);
+    if (op.tipo === 'deposito') e += montoUSD;
+    else if (op.tipo === 'retiro') e -= montoUSD;
+    else if (op.tipo === 'compra') e -= montoUSD;
+    else if (op.tipo === 'venta') e += montoUSD;
+    else if (op.tipo === 'dividendo') e += montoUSD;
     // 'traspaso': sin impacto en efectivo
   }
   return Math.max(0, e);
 }
 
-function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}): GananciaRealizada[] {
+function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}, fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): GananciaRealizada[] {
   const bases = new Map<string, { costoTotal: number; cantidad: number; nombre: string; tipo_activo: string }>();
   const realizadasMap = new Map<string, GananciaRealizada>();
   const transferCostPerUnit = new Map<string, number>();
@@ -232,12 +241,12 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
     const base = bases.get(key)!;
 
     if (op.tipo === 'compra') {
-      base.costoTotal += op.monto_usd; base.cantidad += (op.cantidad || 0);
+      base.costoTotal += getMontoUSDOperacion(op, fallbackMep, mepHistory); base.cantidad += (op.cantidad || 0);
     } else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
       const costoVendido = base.costoTotal * pct;
-      const ganancia = op.monto_usd - costoVendido;
+      const ganancia = getMontoUSDOperacion(op, fallbackMep, mepHistory) - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
       real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
@@ -776,7 +785,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
         const allDates = new Set<string>(); Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
         const puntos = sortedDates.map(fecha => {
-          const opsUpTo = operaciones.filter(o=>o.fecha<=fecha); const posMap = calcularPosicionesBase(opsUpTo);
+          const opsUpTo = operaciones.filter(o=>o.fecha<=fecha); const posMap = calcularPosicionesBase(opsUpTo, mep, mepHistory);
           let valor = 0;
           for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
@@ -789,9 +798,9 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
               valor += pos.costoTotalUSD;
             }
           }
-          valor += Math.max(0, calcularEfectivoUSD(opsUpTo));
-          const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+o.monto_usd,0);
-          const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+o.monto_usd,0);
+          valor += Math.max(0, calcularEfectivoUSD(opsUpTo, mep, mepHistory));
+          const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
+          const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const invertido = Math.max(0, depositos - retiros);
           const rendimiento = invertido>0?+((valor-invertido)/invertido*100).toFixed(2):0;
           return { fecha, valor: Math.round(valor*100)/100, invertido, rendimiento };
@@ -1261,11 +1270,11 @@ export default function PortfolioPage() {
     } catch {}
   }, []);
 
-  const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
-    const posMap = calcularPosicionesBase(ops);
-    const totalInv = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0)
-                   - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
-    const efectivo = calcularEfectivoUSD(ops);
+  const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
+    const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
+    const totalInv = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0)
+                   - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
+    const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos recibidos por ticker
     const rentasByTicker = new Map<string, number>();
@@ -1299,16 +1308,16 @@ export default function PortfolioPage() {
     const activas = completed.filter(p=>!p.esVencido);
     setPosiciones(activas);
     const totalActivos = activas.reduce((s,p)=>s+(p.valorActualUSD||0), 0);
-    const efectivoCagr = Math.max(0, calcularEfectivoUSD(ops));
+    const efectivoCagr = Math.max(0, calcularEfectivoUSD(ops, mepRate, mepHistoryData));
     setXirr(calcularCAGR(ops, totalActivos + efectivoCagr));
-    setRealizadas(calcularGananciasRealizadas(ops, vMap));
+    setRealizadas(calcularGananciasRealizadas(ops, vMap, mepRate, mepHistoryData));
   }, []);
 
   const loadData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true);
     const ops = await loadOperaciones();
     setOperaciones(ops);
-    if (ops.length>0) await buildPositions(ops, mep);
+    if (ops.length>0) await buildPositions(ops, mep, mepHistory);
     await loadNetoCauciones();
     if (refresh) setRefreshing(false); else setLoading(false);
   }, [mep, mepHistory, loadOperaciones, buildPositions, loadNetoCauciones]);
