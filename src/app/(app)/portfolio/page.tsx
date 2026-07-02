@@ -803,7 +803,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
           const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const compras = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const ventas = opsUpTo.filter(o=>o.tipo==='venta').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
-          const invertido = Math.max(0, (depositos || retiros) ? depositos - retiros : compras - ventas);
+          const invertido = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
           const rendimiento = invertido>0?+((valor-invertido)/invertido*100).toFixed(2):0;
           return { fecha, valor: Math.round(valor*100)/100, invertido, rendimiento };
         }).filter(p=>p.valor>0);
@@ -1278,7 +1278,7 @@ export default function PortfolioPage() {
     const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const compras = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const ventas = ops.filter(o => o.tipo === 'venta').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const totalInv = Math.max(0, (depositos || retiros) ? depositos - retiros : compras - ventas);
+    const totalInv = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos recibidos por ticker
