@@ -105,11 +105,6 @@ function detectTipoActivo(ticker: string, tipoInstrumento?: string | null): stri
   return 'cedear';
 }
 
-function isAmortizacionOp(op: Operacion): boolean {
-  const notes = (op.notas || '').toLowerCase();
-  return notes.includes('amort') || notes.includes('venc');
-}
-
 function getMepForDate(fecha: string, fallbackMep: number, mepHistory: MepHistoryEntry[] = []): number {
   if (!fecha) return fallbackMep;
   const today = new Date().toISOString().split('T')[0];
@@ -122,19 +117,6 @@ function getMepForDate(fecha: string, fallbackMep: number, mepHistory: MepHistor
   }
 
   return entries.at(-1)?.venta ?? fallbackMep;
-}
-
-function getOperacionMontoUSD(op: Operacion, fallbackMep: number, mepHistory: MepHistoryEntry[] = []): number {
-  if (op.moneda === 'USD') return op.monto_usd;
-  if ((op.tipo === 'compra' || op.tipo === 'venta') && op.moneda === 'ARS') {
-    const cantidad = Number(op.cantidad ?? 0);
-    const precioUnitario = Number(op.precio_unitario ?? 0);
-    if (cantidad > 0 && precioUnitario > 0) {
-      const rate = getMepForDate(op.fecha, fallbackMep, mepHistory);
-      return (cantidad * precioUnitario) / rate;
-    }
-  }
-  return op.monto_usd;
 }
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
@@ -161,7 +143,7 @@ function pnlColor(pct: number | null): string {
 
 // ── Cálculos de portfolio ─────────────────────────────────────────────────────
 
-function calcularPosicionesBase(ops: Operacion[], fallbackMep = 1430, mepHistory: MepHistoryEntry[] = []): Map<string, PosicionBase> {
+function calcularPosicionesBase(ops: Operacion[]): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   const transferCostPerUnit = new Map<string, number>();
 
@@ -189,12 +171,7 @@ function calcularPosicionesBase(ops: Operacion[], fallbackMep = 1430, mepHistory
 
     if (op.tipo === 'compra') {
       pos.cantidad += (op.cantidad || 0);
-      pos.costoTotalUSD += getOperacionMontoUSD(op, fallbackMep, mepHistory);
-    } else if (isAmortizacionOp(op) && pos.cantidad > 0) {
-      const qty = Math.min(op.cantidad || 0, pos.cantidad);
-      const pct = pos.cantidad > 0 ? qty / pos.cantidad : 0;
-      pos.costoTotalUSD *= (1 - pct);
-      pos.cantidad -= qty;
+      pos.costoTotalUSD += op.monto_usd;
     } else if (op.tipo === 'venta' && pos.cantidad > 0) {
       const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
       pos.costoTotalUSD *= (1 - pct);
@@ -233,7 +210,7 @@ function calcularEfectivoUSD(ops: Operacion[]): number {
   return Math.max(0, e);
 }
 
-function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}, fallbackMep = 1430, mepHistory: MepHistoryEntry[] = []): GananciaRealizada[] {
+function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}): GananciaRealizada[] {
   const bases = new Map<string, { costoTotal: number; cantidad: number; nombre: string; tipo_activo: string }>();
   const realizadasMap = new Map<string, GananciaRealizada>();
   const transferCostPerUnit = new Map<string, number>();
@@ -255,21 +232,15 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
     const base = bases.get(key)!;
 
     if (op.tipo === 'compra') {
-      base.costoTotal += getOperacionMontoUSD(op, fallbackMep, mepHistory); base.cantidad += (op.cantidad || 0);
-    } else if (isAmortizacionOp(op) && base.cantidad > 0) {
-      const qty = Math.min(op.cantidad || 0, base.cantidad);
-      const pct = base.cantidad > 0 ? qty / base.cantidad : 0;
-      base.costoTotal *= (1 - pct);
-      base.cantidad -= qty;
+      base.costoTotal += op.monto_usd; base.cantidad += (op.cantidad || 0);
     } else if (op.tipo === 'venta' && base.cantidad > 0) {
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
       const costoVendido = base.costoTotal * pct;
-      const ventaUSD = getOperacionMontoUSD(op, fallbackMep, mepHistory);
-      const ganancia = ventaUSD - costoVendido;
+      const ganancia = op.monto_usd - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
-      real.montoVentaUSD += ventaUSD; real.costoRealizadoUSD += costoVendido;
+      real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
       real.gananciaUSD += ganancia; real.cantidadVendida += cantVendida;
       base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && base.cantidad > 0) {
@@ -801,27 +772,24 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
           try { const base = normalizarTicker(ticker); const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=1y`); const data = await res.json(); if (!data.error && data.historico?.length) historicos[ticker] = data.historico; } catch {}
         }));
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
-        const basePrices: Record<string,number> = {};
-        for (const ticker of tickers) {
-          const h = historicos[ticker]; if (!h?.length) continue;
-          const primeraCompra = compras.filter(o=>o.ticker===ticker).sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]; if (!primeraCompra) continue;
-          const precioBase = h.filter(p=>p.fecha<=primeraCompra.fecha).at(-1)?.cierre || h.find(p=>p.fecha>=primeraCompra.fecha)?.cierre;
-          if (precioBase) basePrices[ticker] = precioBase;
-        }
         const primeraFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const allDates = new Set<string>(); Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
         const puntos = sortedDates.map(fecha => {
-          const opsUpTo = operaciones.filter(o=>o.fecha<=fecha); const posMap = calcularPosicionesBase(opsUpTo, mep, mepHistory);
+          const opsUpTo = operaciones.filter(o=>o.fecha<=fecha); const posMap = calcularPosicionesBase(opsUpTo);
           let valor = 0;
           for (const pos of Array.from(posMap.values())) {
-            const h = historicos[pos.ticker]; const basePrice = basePrices[pos.ticker];
-            if (!h?.length||!basePrice) { valor+=pos.costoTotalUSD; continue; }
-            const precioFecha = h.filter(p=>p.fecha<=fecha).at(-1)?.cierre;
-            if (!precioFecha) { valor+=pos.costoTotalUSD; continue; }
-            valor+=pos.costoTotalUSD*(precioFecha/basePrice);
+            const h = historicos[pos.ticker];
+            const precioFecha = h?.filter(p=>p.fecha<=fecha).at(-1)?.cierre;
+            if (precioFecha != null && pos.cantidad != null) {
+              const esArg = ['accion_ar','bono','on'].includes(pos.tipo_activo || '');
+              const precioUSD = esArg ? precioFecha / getMepForDate(fecha, mep, mepHistory) : precioFecha;
+              valor += pos.cantidad * precioUSD;
+            } else {
+              valor += pos.costoTotalUSD;
+            }
           }
-          valor+=Math.max(0,calcularEfectivoUSD(opsUpTo));
+          valor += Math.max(0, calcularEfectivoUSD(opsUpTo));
           const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+o.monto_usd,0);
           const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+o.monto_usd,0);
           const invertido = Math.max(0, depositos - retiros);
@@ -835,7 +803,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
       setLoading(false);
     };
     build();
-  }, [operaciones, mep, valorActualIol]);
+  }, [operaciones, mep, mepHistory, valorActualIol]);
 
   if (loading) return <div className="card" style={{ textAlign:'center',padding:'60px' }}><div style={{ color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>Cargando datos históricos...</div></div>;
   if (error||datos.length<=1) return <div className="card" style={{ textAlign:'center',padding:'60px' }}><div style={{ color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>{error||'No hay datos históricos suficientes.'}</div></div>;
@@ -1294,14 +1262,14 @@ export default function PortfolioPage() {
   }, []);
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number) => {
-    const posMap = calcularPosicionesBase(ops, mepRate, mepHistory);
+    const posMap = calcularPosicionesBase(ops);
     const totalInv = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + o.monto_usd, 0)
                    - ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + o.monto_usd, 0);
     const efectivo = calcularEfectivoUSD(ops);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos recibidos por ticker
     const rentasByTicker = new Map<string, number>();
-    for (const op of ops.filter(o => o.tipo === 'dividendo' || isAmortizacionOp(o))) {
+    for (const op of ops.filter(o => o.tipo === 'dividendo')) {
       const key = normalizarTicker(op.ticker);
       rentasByTicker.set(key, (rentasByTicker.get(key) || 0) + op.monto_usd);
     }
@@ -1333,8 +1301,8 @@ export default function PortfolioPage() {
     const totalActivos = activas.reduce((s,p)=>s+(p.valorActualUSD||0), 0);
     const efectivoCagr = Math.max(0, calcularEfectivoUSD(ops));
     setXirr(calcularCAGR(ops, totalActivos + efectivoCagr));
-    setRealizadas(calcularGananciasRealizadas(ops, vMap, mepRate, mepHistory));
-  }, [mepHistory]);
+    setRealizadas(calcularGananciasRealizadas(ops, vMap));
+  }, []);
 
   const loadData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true);
