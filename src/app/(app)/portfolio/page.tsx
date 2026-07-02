@@ -803,7 +803,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
           const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const compras = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const ventas = opsUpTo.filter(o=>o.tipo==='venta').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
-          const invertido = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
+          const invertido = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
           const rendimiento = invertido>0?+((valor-invertido)/invertido*100).toFixed(2):0;
           return { fecha, valor: Math.round(valor*100)/100, invertido, rendimiento };
         }).filter(p=>p.valor>0);
@@ -821,8 +821,10 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
 
   const display = datos.filter((_,i)=>i%Math.max(1,Math.floor(datos.length/80))===0||i===datos.length-1);
   const fin = datos[datos.length-1]; const rendimientoActual = fin.rendimiento;
-  const primerPuntoReal = datos.find(p=>p.valor>0);
-  const variacionCapital = primerPuntoReal&&primerPuntoReal.valor>0?((fin.valor-primerPuntoReal.valor)/primerPuntoReal.valor*100):0;
+  const capitalInvertido = fin.invertido;
+  const primerPunto = datos.find(p=>p.valor>0);
+  const anos = primerPunto && primerPunto.fecha ? (Date.now() - new Date(primerPunto.fecha+'T00:00:00').getTime())/(365.25*86400000) : 0;
+  const cagr = (primerPunto?.valor && fin.valor>0 && anos>0.01) ? ((Math.pow(fin.valor/primerPunto.valor, 1/anos)-1)*100) : null;
   const primeraCompraFecha = operaciones.filter(o=>o.tipo==='compra').sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]?.fecha;
   const xAxisProps = { dataKey:'fecha', tick:{fill:'var(--muted2)',fontSize:9,fontFamily:'DM Mono, monospace'}, tickFormatter:(v:string)=>{const d=new Date(v+'T00:00:00');return `${d.toLocaleString('es-AR',{month:'short'})} ${d.getFullYear().toString().slice(2)}`;}, interval:'preserveStartEnd' as const };
   const tooltipStyle = { background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'8px',fontSize:'12px',fontFamily:'DM Mono, monospace',color:'var(--text)' };
@@ -833,8 +835,8 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
     <div style={{ display:'flex',flexDirection:'column',gap:'16px' }}>
       <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(3, 1fr)',gap:'12px' }}>
         <MetricaCard label="RETORNO TOTAL" small value={(rendimientoActual>=0?'+':'')+rendimientoActual.toFixed(2)+'%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
-        <MetricaCard label="VARIACIÓN" small value={(variacionCapital>=0?'+':'')+variacionCapital.toFixed(1)+'%'} valueColor={colorV(variacionCapital)} sub="Desde primera compra" />
-        {!isMobile && <MetricaCard label="PRIMERA INVERSIÓN" small value={primeraCompraFecha?new Date(primeraCompraFecha+'T12:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'short',year:'numeric'}):'—'} sub="Fecha de inicio" />}
+        <MetricaCard label="CAPITAL INVERTIDO" small value={fmtUSD(capitalInvertido)} valueColor="var(--text)" sub="Base de comparación" />
+        <MetricaCard label="CAGR" small value={cagr!==null?(cagr>=0?'+':'')+cagr.toFixed(2)+'%':'—'} valueColor={cagr!==null?colorV(cagr):'var(--muted)'} sub={cagr!==null&&anos>0?`Años: ${anos.toFixed(2)}`:"Período muy corto"} />
       </div>
       <div className="card">
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px' }}>
@@ -1278,7 +1280,7 @@ export default function PortfolioPage() {
     const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const compras = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const ventas = ops.filter(o => o.tipo === 'venta').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const totalInv = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
+    const totalInv = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos recibidos por ticker
