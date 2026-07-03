@@ -870,9 +870,9 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
   return (
     <div style={{ display:'flex',flexDirection:'column',gap:'16px' }}>
       <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(3, 1fr)',gap:'12px' }}>
-        <MetricaCard label="RETORNO TWR" small value={(rendimientoActual>=0?'+':'')+rendimientoActual.toFixed(2)+'%'} valueColor={colorV(rendimientoActual)} sub="Sin efecto de nuevas inversiones" />
+        <MetricaCard label="RENDIMIENTO TOTAL" small value={(rendimientoActual>=0?'+':'')+rendimientoActual.toFixed(2)+'%'} valueColor={colorV(rendimientoActual)} sub="Sin efecto de nuevas inversiones" />
         <MetricaCard label="CAPITAL INVERTIDO" small value={fmtUSD(capitalInvertido)} valueColor="var(--text)" sub="Costo neto de posiciones" />
-        <MetricaCard label="CAGR TWR" small value={cagr!==null?(cagr>=0?'+':'')+cagr.toFixed(2)+'%':'—'} valueColor={cagr!==null?colorV(cagr):'var(--muted)'} sub={cagr!==null&&anos>0?`Años: ${anos.toFixed(2)}`:"Período muy corto"} />
+        <MetricaCard label="RENDIMIENTO ANUALIZADO" small value={cagr!==null?(cagr>=0?'+':'')+cagr.toFixed(2)+'%':'—'} valueColor={cagr!==null?colorV(cagr):'var(--muted)'} sub={cagr!==null&&anos>0?`Años: ${anos.toFixed(2)}`:"Período muy corto"} />
       </div>
       <div className="card">
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px' }}>
@@ -895,7 +895,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
       </div>
       <div className="card">
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px' }}>
-          <div><div className="label-xs" style={{ marginBottom:'4px' }}>📈 Rendimiento acumulado (TWR)</div><div style={{ fontSize:'12px',color:'var(--muted)' }}>Aislado de nuevas incorporaciones de capital</div></div>
+          <div><div className="label-xs" style={{ marginBottom:'4px' }}>📈 Rendimiento acumulado</div><div style={{ fontSize:'12px',color:'var(--muted)' }}>Aislado de nuevas incorporaciones de capital</div></div>
           <div style={{ textAlign:'right' }}><div style={{ fontFamily:'DM Mono, monospace',fontSize:'18px',fontWeight:700,color:colorV(rendimientoActual) }}>{rendimientoActual>=0?'+':''}{rendimientoActual.toFixed(2)}%</div></div>
         </div>
         <ResponsiveContainer width="100%" height={chartH}>
