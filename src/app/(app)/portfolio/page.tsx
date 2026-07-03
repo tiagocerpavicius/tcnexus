@@ -782,7 +782,11 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
         }));
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
         const primeraFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
-        const allDates = new Set<string>(); Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
+        const allDates = new Set<string>();
+        Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
+        // Incluir fechas de operaciones para que los flujos de capital se capturen en TWR
+        // (sin esto, compras en fin de semana o feriados no aparecen en cfToday y explotan el factor)
+        operaciones.filter(o=>['compra','venta','deposito','retiro'].includes(o.tipo)).forEach(o=>allDates.add(o.fecha));
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
         // TWR: rendimiento puro sin efecto de nuevas incorporaciones de capital
         const puntos: { fecha: string; valor: number; invertido: number; rendimiento: number }[] = [];
