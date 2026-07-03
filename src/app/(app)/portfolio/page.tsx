@@ -844,6 +844,234 @@ function TabPerformance({ posiciones, realizadas }: { posiciones: PosicionComple
   );
 }
 
+// ── Tab: Por Activo ───────────────────────────────────────────────────────────
+
+function ModalHistorialActivo({ pos, operaciones, realizada, mep, mepHistory, onClose }: {
+  pos: PosicionCompleta; operaciones: Operacion[]; realizada?: GananciaRealizada;
+  mep: number; mepHistory: MepHistoryEntry[]; onClose: () => void;
+}) {
+  const isMobile = useIsMobile();
+  const compras = operaciones.filter(o => o.tipo === 'compra').sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const priceUSD = pos.moneda === 'ARS' ? (pos.precioActual || 0) / mep : (pos.precioActual || 0);
+
+  // Tenencia promedio ponderada por cantidad
+  const hoy = Date.now();
+  let totalWeightedDays = 0, totalQty = 0;
+  compras.forEach(op => {
+    const dias = (hoy - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000;
+    totalWeightedDays += dias * (op.cantidad || 0);
+    totalQty += (op.cantidad || 0);
+  });
+  const tenenciaDias = totalQty > 0 ? totalWeightedDays / totalQty : 0;
+  const tenenciaLabel = tenenciaDias < 30 ? `${Math.round(tenenciaDias)} d` : tenenciaDias < 365 ? `${Math.round(tenenciaDias/30)} m` : `${(tenenciaDias/365).toFixed(1)} a`;
+
+  // TIR anual por posición
+  const firstBuyFecha = compras[0]?.fecha;
+  const anos = firstBuyFecha ? (hoy - new Date(firstBuyFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
+  const tir = (pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05)
+    ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100)
+    : null;
+
+  // Lotes acumulados para mostrar posición corrida
+  let cumQty = 0, cumCosto = 0;
+  const lotsConRunning = compras.map(op => {
+    const montoUSD = getMontoUSDOperacion(op, mep, mepHistory);
+    cumQty += op.cantidad || 0;
+    cumCosto += montoUSD;
+    const lotPnl = priceUSD > 0 ? priceUSD * (op.cantidad || 0) - montoUSD : null;
+    const lotPnlPct = montoUSD > 0 && lotPnl != null ? (lotPnl / montoUSD) * 100 : null;
+    return { op, montoUSD, lotPnl, lotPnlPct, runQty: cumQty, runAvg: cumQty > 0 ? cumCosto / cumQty : 0 };
+  }).reverse();
+
+  const fmtDate = (d: string) => { const dt = new Date(d + 'T00:00:00'); return dt.toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' }); };
+
+  return (
+    <div style={{ position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:1000,display:'flex',alignItems:'flex-end',justifyContent:'center',padding: isMobile ? 0 : '20px' }} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background:'var(--surface)',borderRadius: isMobile ? '20px 20px 0 0' : '16px',width:'100%',maxWidth:'560px',maxHeight: isMobile ? '92vh' : '88vh',display:'flex',flexDirection:'column',overflow:'hidden' }}>
+        {/* Header */}
+        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 20px 14px',borderBottom:'1px solid var(--border)' }}>
+          <div>
+            <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'16px',color:'var(--text)' }}>{pos.ticker} — Historial de Operaciones</div>
+            {pos.nombre !== pos.ticker && <div style={{ fontSize:'11px',color:'var(--muted)',marginTop:'2px' }}>{pos.nombre}</div>}
+          </div>
+          <button onClick={onClose} style={{ background:'none',border:'none',cursor:'pointer',color:'var(--muted)',padding:'4px',display:'flex',alignItems:'center' }}><X size={18} /></button>
+        </div>
+        <div style={{ overflowY:'auto',padding:'16px 20px',display:'flex',flexDirection:'column',gap:'12px' }}>
+          {/* Métricas resumen */}
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px' }}>
+            {[
+              { label:'PRECIO ACTUAL', value: pos.precioActual != null ? (pos.moneda === 'ARS' ? fmtARS(pos.precioActual) : fmtUSD(pos.precioActual)) : '—', info:'Último precio que tenemos de este activo en USD. Si cotiza en ARS, lo convertimos usando el último tipo de cambio.' },
+              { label:'CANTIDAD', value: fmtNum(pos.cantidad, 2), info: null },
+              { label:'VALOR', value: fmtUSD(pos.valorActualUSD), info: null },
+              { label:'COSTO PROM.', value: fmtUSD(pos.costoPromedioUSD), info:'Precio promedio ponderado de compra en USD.' },
+              { label:'G/P NO REALIZADA', value: pos.pnlUSD != null ? (pos.pnlUSD >= 0 ? '+' : '') + fmtUSD(pos.pnlUSD) : '—', sub: pos.pnlPct != null ? fmtPct(pos.pnlPct) : undefined, color: colorV(pos.pnlUSD), info: null },
+              { label:'G/P REALIZADA', value: realizada ? (realizada.gananciaUSD >= 0 ? '+' : '') + fmtUSD(realizada.gananciaUSD) : '—', sub: realizada && realizada.montoVentaUSD > 0 ? fmtPct(realizada.gananciaPct) : undefined, color: colorV(realizada?.gananciaUSD ?? null), info: null },
+              { label:'TENENCIA PROM.', value: tenenciaLabel, info:'Tiempo promedio de tenencia ponderado por cantidad de cada compra.' },
+              { label:'TIR ANUAL', value: tir != null ? (tir >= 0 ? '+' : '') + tir.toFixed(2) + '%' : '—', color: colorV(tir), info:'Tasa Interna de Retorno anualizada sobre la posición actual.' },
+            ].map(m => (
+              <div key={m.label} style={{ background:'var(--surface2)',borderRadius:'10px',padding:'10px 12px' }}>
+                <div style={{ display:'flex',alignItems:'center',gap:'4px',marginBottom:'4px' }}>
+                  <span className="label-xs" style={{ fontSize:'9px' }}>{m.label}</span>
+                  {m.info && <span title={m.info} style={{ color:'var(--muted2)',cursor:'help',fontSize:'10px' }}>ⓘ</span>}
+                </div>
+                <div style={{ fontFamily:'DM Mono, monospace',fontWeight:600,fontSize:'15px',color: m.color || 'var(--text)' }}>{m.value}</div>
+                {m.sub && <div style={{ fontFamily:'DM Mono, monospace',fontSize:'11px',color: m.color || 'var(--muted)',marginTop:'1px' }}>{m.sub}</div>}
+              </div>
+            ))}
+          </div>
+          {/* Timeline de compras */}
+          <div style={{ borderTop:'1px solid var(--border)',paddingTop:'12px' }}>
+            <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'12px',color:'var(--muted2)',marginBottom:'12px',letterSpacing:'0.06em' }}>COMPRAS</div>
+            <div style={{ display:'flex',flexDirection:'column',gap:'0' }}>
+              {lotsConRunning.map(({ op, montoUSD, lotPnl, lotPnlPct, runQty, runAvg }, i) => (
+                <div key={op.id} style={{ display:'flex',gap:'12px',paddingBottom:'0' }}>
+                  {/* Línea timeline */}
+                  <div style={{ display:'flex',flexDirection:'column',alignItems:'center',flexShrink:0 }}>
+                    <div style={{ width:'10px',height:'10px',borderRadius:'50%',background:'var(--violet)',flexShrink:0,marginTop:'14px' }} />
+                    {i < lotsConRunning.length - 1 && <div style={{ width:'2px',flex:1,background:'var(--border)',minHeight:'32px' }} />}
+                  </div>
+                  {/* Contenido del lote */}
+                  <div style={{ flex:1,paddingBottom:'16px' }}>
+                    <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'6px' }}>
+                      <span style={{ background:'rgba(16,185,129,0.15)',color:'var(--green)',borderRadius:'5px',padding:'2px 8px',fontSize:'10px',fontFamily:'Syne, sans-serif',fontWeight:700 }}>COMPRA</span>
+                      <span style={{ fontSize:'12px',color:'var(--muted2)',fontFamily:'DM Mono, monospace' }}>{fmtDate(op.fecha)}</span>
+                    </div>
+                    <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'4px',marginBottom:'6px' }}>
+                      {[['CANT.', fmtNum(op.cantidad || 0, 2)], ['PRECIO', fmtUSD(montoUSD / (op.cantidad || 1))], ['TOTAL', fmtUSD(montoUSD)]].map(([l, v]) => (
+                        <div key={l}>
+                          <div style={{ fontSize:'9px',color:'var(--muted2)',fontFamily:'Syne, sans-serif',fontWeight:700,letterSpacing:'0.06em' }}>{l}</div>
+                          <div style={{ fontSize:'13px',color:'var(--text)',fontFamily:'DM Mono, monospace',fontWeight:600 }}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {lotPnl != null && (
+                      <div style={{ background: lotPnl >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', borderRadius:'6px', padding:'4px 8px', display:'inline-flex', gap:'6px', alignItems:'center', marginBottom:'6px' }}>
+                        <span style={{ fontFamily:'DM Mono, monospace',fontWeight:700,fontSize:'12px',color: lotPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                          G/P {lotPnl >= 0 ? '+' : ''}{fmtUSD(lotPnl)}
+                        </span>
+                        <span style={{ fontFamily:'DM Mono, monospace',fontSize:'11px',color: lotPnl >= 0 ? 'var(--green)' : 'var(--red)', opacity:0.8 }}>
+                          ({lotPnlPct != null ? (lotPnlPct >= 0 ? '+' : '') + lotPnlPct.toFixed(2) + '%' : '—'})
+                        </span>
+                      </div>
+                    )}
+                    <div style={{ fontSize:'10px',color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>
+                      Posición: {fmtNum(runQty, 2)} unidades @ {fmtUSD(runAvg)} prom
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: {
+  posiciones: PosicionCompleta[]; operaciones: Operacion[]; realizadas: GananciaRealizada[];
+  mep: number; mepHistory: MepHistoryEntry[];
+}) {
+  const isMobile = useIsMobile();
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'valor'|'pnl'|'pnlPct'>('valor');
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const totalValor = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
+
+  const filtered = posiciones
+    .filter(p => p.ticker.includes(search.toUpperCase()) || (p.nombre || '').toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      if (sortBy === 'valor') return (b.valorActualUSD || 0) - (a.valorActualUSD || 0);
+      if (sortBy === 'pnl') return (b.pnlUSD || 0) - (a.pnlUSD || 0);
+      return (b.pnlPct || 0) - (a.pnlPct || 0);
+    });
+
+  const selectedPos = selected ? posiciones.find(p => p.ticker === selected) : null;
+
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:'12px' }}>
+      {/* Controles */}
+      <div style={{ display:'flex',gap:'8px',flexWrap:'wrap' }}>
+        <input
+          placeholder="Buscar símbolo o nombre..."
+          value={search} onChange={e => setSearch(e.target.value)}
+          style={{ flex:1,minWidth:'160px',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'DM Mono, monospace',fontSize:'13px',outline:'none' }}
+        />
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
+          style={{ background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'12px',cursor:'pointer' }}>
+          <option value="valor">Valor ↓</option>
+          <option value="pnl">G/P $ ↓</option>
+          <option value="pnlPct">G/P % ↓</option>
+        </select>
+      </div>
+      {/* Cards */}
+      <div style={{ display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:'10px' }}>
+        {filtered.map(pos => {
+          const opsActivo = operaciones.filter(o => normalizarTicker(o.ticker) === pos.ticker);
+          const real = realizadas.find(r => r.ticker === pos.ticker);
+          const pctPortfolio = totalValor > 0 && pos.valorActualUSD ? (pos.valorActualUSD / totalValor) * 100 : 0;
+          const compras = opsActivo.filter(o => o.tipo === 'compra');
+          const hoy = Date.now();
+          let twDays = 0, tqty = 0;
+          compras.forEach(op => { const d = (hoy - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000; twDays += d * (op.cantidad || 0); tqty += (op.cantidad || 0); });
+          const tenDias = tqty > 0 ? twDays / tqty : 0;
+          const tenLabel = tenDias < 30 ? `${Math.round(tenDias)} d` : tenDias < 365 ? `${Math.round(tenDias/30)} m` : `${(tenDias/365).toFixed(1)} a`;
+          const firstFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]?.fecha;
+          const anos = firstFecha ? (hoy - new Date(firstFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
+          const tir = (pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05)
+            ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100) : null;
+
+          return (
+            <div key={pos.ticker} onClick={() => setSelected(pos.ticker)}
+              style={{ background:'var(--surface2)',borderRadius:'12px',padding:'14px 16px',cursor:'pointer',border:'1px solid var(--border)',transition:'border-color 0.15s' }}
+              onMouseOver={e=>(e.currentTarget.style.borderColor='var(--violet)')}
+              onMouseOut={e=>(e.currentTarget.style.borderColor='var(--border)')}>
+              <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px' }}>
+                <div>
+                  <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'15px',color:'var(--text)' }}>{pos.ticker}</div>
+                  {pos.nombre !== pos.ticker && <div style={{ fontSize:'10px',color:'var(--muted)',marginTop:'1px' }}>{pos.nombre}</div>}
+                </div>
+                <TrendingUp size={14} style={{ color:'var(--muted2)' }} />
+              </div>
+              <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',fontSize:'12px',fontFamily:'DM Mono, monospace' }}>
+                {[
+                  ['Cantidad', fmtNum(pos.cantidad, 2), 'var(--text)'],
+                  ['Precio Prom.', fmtUSD(pos.costoPromedioUSD), 'var(--text)'],
+                  ['Precio', pos.precioActual != null ? (pos.moneda === 'ARS' ? fmtARS(pos.precioActual) : fmtUSD(pos.precioActual)) : '—', 'var(--text)'],
+                  ['Valor', fmtUSD(pos.valorActualUSD), 'var(--amber)'],
+                  ['% Portfolio', pctPortfolio.toFixed(1) + '%', 'var(--text2)'],
+                  ['Invertido', fmtUSD(pos.costoTotalUSD), 'var(--text2)'],
+                  ['No Real. ($)', pos.pnlUSD != null ? (pos.pnlUSD >= 0 ? '+' : '') + fmtUSD(pos.pnlUSD) : '—', colorV(pos.pnlUSD)],
+                  ['No Real. (%)', pos.pnlPct != null ? fmtPct(pos.pnlPct) : '—', colorV(pos.pnlPct)],
+                  ['Real. ($)', real ? (real.gananciaUSD >= 0 ? '+' : '') + fmtUSD(real.gananciaUSD) : '—', colorV(real?.gananciaUSD ?? null)],
+                  ['Real. (%)', real && real.montoVentaUSD > 0 ? fmtPct(real.gananciaPct) : '—', colorV(real?.gananciaPct ?? null)],
+                  ['TIR', tir != null ? (tir >= 0 ? '+' : '') + tir.toFixed(2) + '%' : '—', colorV(tir)],
+                  ['Tenencia prom.', tenLabel, 'var(--text2)'],
+                ].map(([label, value, color]) => (
+                  <div key={label as string}>
+                    <div style={{ fontSize:'9px',color:'var(--muted2)',fontFamily:'Syne, sans-serif',fontWeight:700,letterSpacing:'0.06em',marginBottom:'1px' }}>{label as string}</div>
+                    <div style={{ color: color as string,fontWeight:600 }}>{value as string}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {selectedPos && (
+        <ModalHistorialActivo
+          pos={selectedPos}
+          operaciones={operaciones.filter(o => normalizarTicker(o.ticker) === selectedPos.ticker)}
+          realizada={realizadas.find(r => r.ticker === selectedPos.ticker)}
+          mep={mep} mepHistory={mepHistory}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Tab: Historial ────────────────────────────────────────────────────────────
 
 function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operaciones: Operacion[]; mep: number; mepHistory: MepHistoryEntry[]; valorActualIol: number }) {
@@ -1371,7 +1599,7 @@ function TabResumen({ posiciones, efectivoUSD, mep, totalInvertidoUSD, realizada
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type TabKey = 'resumen'|'posiciones'|'mapa'|'distribucion'|'performance'|'historial'|'operaciones';
+type TabKey = 'resumen'|'posiciones'|'mapa'|'distribucion'|'performance'|'por-activo'|'historial'|'operaciones';
 
 export default function PortfolioPage() {
   const isMobile = useIsMobile();
@@ -1581,6 +1809,7 @@ export default function PortfolioPage() {
               {key:'mapa' as TabKey,         label:'Mapa',       icon:'🗺️'},
               {key:'distribucion' as TabKey, label:'Dist.',      icon:'🥧'},
               {key:'performance' as TabKey,  label:'Perf.',      icon:'🏆'},
+              {key:'por-activo' as TabKey,   label:'Por activo', icon:'📊'},
               {key:'historial' as TabKey,    label:'Historial',  icon:'📈'},
               {key:'operaciones' as TabKey,  label:'Ops.',       icon:'📝'},
             ]).map(t=>(
@@ -1595,6 +1824,7 @@ export default function PortfolioPage() {
           {tab==='mapa'         && <TabMapa posiciones={posiciones} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab==='performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
+          {tab==='por-activo'   && <TabPorActivo posiciones={posiciones} operaciones={operaciones} realizadas={realizadas} mep={mep} mepHistory={mepHistory} />}
           {tab==='historial'    && <TabHistorial operaciones={operaciones} mep={mep} mepHistory={mepHistory} valorActualIol={valorTotalUSD} />}
           {tab==='operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async(id)=>{await supabase.from('operaciones').delete().eq('id',id);await loadData(true);}} onImport={()=>setShowImport(true)} />}
         </>
