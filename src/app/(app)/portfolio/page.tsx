@@ -560,9 +560,10 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 
 // ── Tab: Posiciones ───────────────────────────────────────────────────────────
 
-function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], caucionesTomadasUSD = 0, caucionesTomadasARS = 0 }: {
+function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], caucionesTomadasUSD = 0, caucionesTomadasARS = 0, caucionesInteresUSD = 0, caucionesInteresARS = 0 }: {
   posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number;
   caucionActivos?: CaucionActivoSimple[]; caucionesTomadasUSD?: number; caucionesTomadasARS?: number;
+  caucionesInteresUSD?: number; caucionesInteresARS?: number;
 }) {
   const [verUSD, setVerUSD] = useState(false);
 
@@ -602,7 +603,8 @@ function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], cauc
 
   const totalActivosUSD = posicionesMerged.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
   const caucionesTomadasTotalUSD = caucionesTomadasUSD + caucionesTomadasARS / mep;
-  const valorTotalUSD = totalActivosUSD + efectivoUSD - caucionesTomadasTotalUSD;
+  const caucionesInteresTotalUSD = caucionesInteresUSD + caucionesInteresARS / mep;
+  const valorTotalUSD = totalActivosUSD + efectivoUSD - caucionesTomadasTotalUSD - caucionesInteresTotalUSD;
   const totalCostoUSD = posicionesMerged.reduce((s, p) => s + p.costoTotalUSD, 0);
   const totalPnlUSD = posicionesMerged.reduce((s, p) => s + (p.pnlUSD || 0), 0);
   const totalRentasUSD = posicionesMerged.reduce((s, p) => s + p.pnlRentas, 0);
@@ -680,11 +682,14 @@ function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], cauc
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(245,158,11,0.04)' }}>
                 <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
                   <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--amber)', whiteSpace: 'nowrap' }}>Caución Tomada</div>
-                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>USD · Capital prestado</div>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
+                    USD · {verUSD ? fmtUSD(caucionesTomadasUSD) : fmtARS(caucionesTomadasUSD*mep)} capital
+                    {caucionesInteresUSD > 0 && <> · <span style={{ color: 'var(--red)' }}>{verUSD ? fmtUSD(caucionesInteresUSD) : fmtARS(caucionesInteresUSD*mep)} interés</span></>}
+                  </div>
                 </td>
                 <td colSpan={3} />
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                  -{verUSD ? fmtUSD(caucionesTomadasUSD) : fmtARS(caucionesTomadasUSD*mep)}
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  -{verUSD ? fmtUSD(caucionesTomadasUSD + caucionesInteresUSD) : fmtARS((caucionesTomadasUSD + caucionesInteresUSD)*mep)}
                 </td>
                 <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
                 <td colSpan={2} />
@@ -696,11 +701,14 @@ function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], cauc
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(245,158,11,0.04)' }}>
                 <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
                   <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--amber)', whiteSpace: 'nowrap' }}>Caución Tomada</div>
-                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>ARS · Capital prestado</div>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
+                    ARS · {verUSD ? fmtUSD(caucionesTomadasARS/mep) : fmtARS(caucionesTomadasARS)} capital
+                    {caucionesInteresARS > 0 && <> · <span style={{ color: 'var(--red)' }}>{verUSD ? fmtUSD(caucionesInteresARS/mep) : fmtARS(caucionesInteresARS)} interés</span></>}
+                  </div>
                 </td>
                 <td colSpan={3} />
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                  -{verUSD ? fmtUSD(caucionesTomadasARS/mep) : fmtARS(caucionesTomadasARS)}
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  -{verUSD ? fmtUSD((caucionesTomadasARS + caucionesInteresARS)/mep) : fmtARS(caucionesTomadasARS + caucionesInteresARS)}
                 </td>
                 <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
                 <td colSpan={2} />
@@ -1386,6 +1394,8 @@ export default function PortfolioPage() {
   const [caucionActivos, setCaucionActivos] = useState<CaucionActivoSimple[]>([]);
   const [caucionesTomadasUSD, setCaucionesTomadasUSD] = useState(0);
   const [caucionesTomadasARS, setCaucionesTomadasARS] = useState(0);
+  const [caucionesInteresUSD, setCaucionesInteresUSD] = useState(0);
+  const [caucionesInteresARS, setCaucionesInteresARS] = useState(0);
 
   useEffect(() => {
     fetch('/api/dolar').then(r=>r.json()).then((data:any[])=>{
@@ -1412,14 +1422,17 @@ export default function PortfolioPage() {
       if (!caucRes.data||!perRes.data||!actRes.data) return;
       const costosPorCaucion: Record<string,number> = {};
       perRes.data.forEach((p:any)=>{ costosPorCaucion[p.caucion_id]=(costosPorCaucion[p.caucion_id]||0)+p.intereses; });
-      const calcNeto = (moneda:string) => {
+      const calcCosto = (moneda:string) => {
         const caucs=caucRes.data!.filter((c:any)=>(c.moneda||'USD')===moneda);
+        return caucs.reduce((t:number,c:any)=>t+(costosPorCaucion[c.id]||0)+c.monto*(c.tna/100)*(c.plazo/365),0);
+      };
+      const calcNeto = (moneda:string) => {
         const acts=actRes.data!.filter((a:any)=>(a.moneda||'USD')===moneda);
-        const costo=caucs.reduce((t:number,c:any)=>t+(costosPorCaucion[c.id]||0)+c.monto*(c.tna/100)*(c.plazo/365),0);
         const pnl=acts.reduce((t:number,a:any)=>t+((a.precio_venta??a.precio_actual)-a.precio_compra)*a.cantidad,0);
-        return pnl-costo;
+        return pnl-calcCosto(moneda);
       };
       setNetoCaucionesUSD(calcNeto('USD')); setNetoCaucionesARS(calcNeto('ARS'));
+      setCaucionesInteresUSD(calcCosto('USD')); setCaucionesInteresARS(calcCosto('ARS'));
       // Posiciones abiertas para mostrar en portfolio
       const abiertas = actRes.data.filter((a:any) => !a.precio_venta);
       setCaucionActivos(abiertas.map((r:any) => ({
@@ -1499,8 +1512,10 @@ export default function PortfolioPage() {
   };
 
   const totalActivosUSD = posiciones.reduce((s,p)=>s+(p.valorActualUSD||0), 0);
-  const netoCaucionesTotalUSD = (netoCaucionesUSD??0) + ((netoCaucionesARS??0)/mep);
-  const valorTotalUSD = totalActivosUSD + efectivoUSD + netoCaucionesTotalUSD;
+  const caucionActivosValorUSD = caucionActivos.reduce((s,a) => s + (a.moneda==='USD' ? a.precioActual : a.precioActual/mep) * a.cantidad, 0);
+  const caucionesTomadasTotalUSD = caucionesTomadasUSD + caucionesTomadasARS / mep;
+  const caucionesInteresTotalUSD = caucionesInteresUSD + caucionesInteresARS / mep;
+  const valorTotalUSD = totalActivosUSD + efectivoUSD + caucionActivosValorUSD - caucionesTomadasTotalUSD - caucionesInteresTotalUSD;
   const gananciaNeta = valorTotalUSD - totalInvertidoUSD;
   const gananciaNetaPct = totalInvertidoUSD>0?(gananciaNeta/totalInvertidoUSD)*100:0;
   const variacionHoy = posiciones.reduce((s,p)=>{ if(p.variacionDiaria!=null&&p.valorActualUSD!=null)return s+p.valorActualUSD-(p.valorActualUSD/(1+p.variacionDiaria/100)); return s; }, 0);
@@ -1576,7 +1591,7 @@ export default function PortfolioPage() {
           </div>
 
           {tab==='resumen'      && <TabResumen posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
-          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} />}
+          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} caucionesInteresUSD={caucionesInteresUSD} caucionesInteresARS={caucionesInteresARS} />}
           {tab==='mapa'         && <TabMapa posiciones={posiciones} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab==='performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
