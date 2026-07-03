@@ -778,64 +778,60 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
         const tickers = Array.from(new Set(compras.map(o => o.ticker)));
         const historicos: Record<string, { fecha: string; cierre: number }[]> = {};
         await Promise.all(tickers.map(async ticker => {
-          try { const base = normalizarTicker(ticker); const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=1y`); const data = await res.json(); if (!data.error && data.historico?.length) historicos[ticker] = data.historico; } catch {}
+          try { const base = normalizarTicker(ticker); const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=2y`); const data = await res.json(); if (!data.error && data.historico?.length) historicos[ticker] = data.historico; } catch {}
         }));
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
         const primeraFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
-        // Incluir fechas de operaciones para que los flujos de capital se capturen en TWR
-        // (sin esto, compras en fin de semana o feriados no aparecen en cfToday y explotan el factor)
         operaciones.filter(o=>['compra','venta','deposito','retiro'].includes(o.tipo)).forEach(o=>allDates.add(o.fecha));
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
-        // TWR: rendimiento puro sin efecto de nuevas incorporaciones de capital
+
+        // Calcula el valor de mercado de las posiciones (sin efectivo) en una fecha dada
+        const valorPosiciones = (ops: Operacion[], atFecha: string): number => {
+          const posMap = calcularPosicionesBase(ops, mep, mepHistory);
+          let v = 0;
+          for (const pos of Array.from(posMap.values())) {
+            const h = historicos[pos.ticker];
+            const precioFecha = h?.filter(p => p.fecha <= atFecha).at(-1)?.cierre;
+            if (precioFecha != null && pos.cantidad != null) {
+              const esArg = ['accion_ar','bono','on'].includes(pos.tipo_activo || '');
+              v += pos.cantidad * (esArg ? precioFecha / getMepForDate(atFecha, mep, mepHistory) : precioFecha);
+            } else {
+              v += pos.costoTotalUSD;
+            }
+          }
+          return v;
+        };
+
+        // TWR correcto: mide performance ANTES de los flujos del día para aislar inversiones de nuevo capital
         const puntos: { fecha: string; valor: number; invertido: number; rendimiento: number }[] = [];
         let twrFactor = 1.0;
         let prevValor: number | null = null;
 
         for (const fecha of sortedDates) {
           const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
-          const opsOnDate = operaciones.filter(o => o.fecha === fecha);
-          const posMap = calcularPosicionesBase(opsUpTo, mep, mepHistory);
-          let valor = 0;
-          for (const pos of Array.from(posMap.values())) {
-            const h = historicos[pos.ticker];
-            const precioFecha = h?.filter(p => p.fecha <= fecha).at(-1)?.cierre;
-            if (precioFecha != null && pos.cantidad != null) {
-              const esArg = ['accion_ar','bono','on'].includes(pos.tipo_activo || '');
-              const precioUSD = esArg ? precioFecha / getMepForDate(fecha, mep, mepHistory) : precioFecha;
-              valor += pos.cantidad * precioUSD;
-            } else {
-              valor += pos.costoTotalUSD;
-            }
-          }
-          valor += Math.max(0, calcularEfectivoUSD(opsUpTo, mep, mepHistory));
-          if (valor <= 0) continue;
+          const opsAntes = operaciones.filter(o => o.fecha < fecha);
 
-          // Flujo neto de capital externo en esta fecha (compras nuevas, depósitos, retiros)
-          const cfToday = opsOnDate.reduce((s, o) => {
-            const m = getMontoUSDOperacion(o, mep, mepHistory);
-            if (o.tipo === 'compra') return s + m;
-            if (o.tipo === 'venta') return s - m;
-            if (o.tipo === 'deposito') return s + m;
-            if (o.tipo === 'retiro') return s - m;
-            return s;
-          }, 0);
+          const valorAntes = valorPosiciones(opsAntes, fecha);
+          const valorDespues = valorPosiciones(opsUpTo, fecha);
 
-          // Actualizar TWR: ajusta por capital nuevo para aislar el rendimiento de inversiones
-          if (prevValor !== null && prevValor > 0) {
-            const denom = prevValor + cfToday;
-            if (denom > 0) twrFactor *= valor / denom;
+          if (valorDespues <= 0) continue;
+
+          // Sub-período: desde prevValor hasta valorAntes (antes de inyectar/retirar capital hoy)
+          if (prevValor !== null && prevValor > 0 && valorAntes > 0) {
+            twrFactor *= valorAntes / prevValor;
           }
+
+          prevValor = valorDespues;
 
           const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
-          const compras = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
-          const ventas = opsUpTo.filter(o=>o.tipo==='venta').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
-          const invertido = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
+          const comprasAcum = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
+          const ventasAcum = opsUpTo.filter(o=>o.tipo==='venta').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
+          const invertido = Math.max(0, (comprasAcum !== 0 || ventasAcum !== 0) ? comprasAcum - ventasAcum : depositos - retiros);
 
-          prevValor = valor;
-          puntos.push({ fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento: +((twrFactor - 1) * 100).toFixed(2) });
+          puntos.push({ fecha, valor: Math.round(valorDespues * 100) / 100, invertido, rendimiento: +((twrFactor - 1) * 100).toFixed(2) });
         }
 
         // Anclar el último valor al valor actual real (compensa precios con lag)
