@@ -784,12 +784,19 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
         const primeraFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const allDates = new Set<string>(); Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
-        const puntos = sortedDates.map(fecha => {
-          const opsUpTo = operaciones.filter(o=>o.fecha<=fecha); const posMap = calcularPosicionesBase(opsUpTo, mep, mepHistory);
+        // TWR: rendimiento puro sin efecto de nuevas incorporaciones de capital
+        const puntos: { fecha: string; valor: number; invertido: number; rendimiento: number }[] = [];
+        let twrFactor = 1.0;
+        let prevValor: number | null = null;
+
+        for (const fecha of sortedDates) {
+          const opsUpTo = operaciones.filter(o => o.fecha <= fecha);
+          const opsOnDate = operaciones.filter(o => o.fecha === fecha);
+          const posMap = calcularPosicionesBase(opsUpTo, mep, mepHistory);
           let valor = 0;
           for (const pos of Array.from(posMap.values())) {
             const h = historicos[pos.ticker];
-            const precioFecha = h?.filter(p=>p.fecha<=fecha).at(-1)?.cierre;
+            const precioFecha = h?.filter(p => p.fecha <= fecha).at(-1)?.cierre;
             if (precioFecha != null && pos.cantidad != null) {
               const esArg = ['accion_ar','bono','on'].includes(pos.tipo_activo || '');
               const precioUSD = esArg ? precioFecha / getMepForDate(fecha, mep, mepHistory) : precioFecha;
@@ -799,15 +806,42 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
             }
           }
           valor += Math.max(0, calcularEfectivoUSD(opsUpTo, mep, mepHistory));
+          if (valor <= 0) continue;
+
+          // Flujo neto de capital externo en esta fecha (compras nuevas, depósitos, retiros)
+          const cfToday = opsOnDate.reduce((s, o) => {
+            const m = getMontoUSDOperacion(o, mep, mepHistory);
+            if (o.tipo === 'compra') return s + m;
+            if (o.tipo === 'venta') return s - m;
+            if (o.tipo === 'deposito') return s + m;
+            if (o.tipo === 'retiro') return s - m;
+            return s;
+          }, 0);
+
+          // Actualizar TWR: ajusta por capital nuevo para aislar el rendimiento de inversiones
+          if (prevValor !== null && prevValor > 0) {
+            const denom = prevValor + cfToday;
+            if (denom > 0) twrFactor *= valor / denom;
+          }
+
           const depositos = opsUpTo.filter(o=>o.tipo==='deposito').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const retiros   = opsUpTo.filter(o=>o.tipo==='retiro').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const compras = opsUpTo.filter(o=>o.tipo==='compra').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const ventas = opsUpTo.filter(o=>o.tipo==='venta').reduce((s,o)=>s+getMontoUSDOperacion(o, mep, mepHistory),0);
           const invertido = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
-          const rendimiento = invertido>0?+((valor-invertido)/invertido*100).toFixed(2):0;
-          return { fecha, valor: Math.round(valor*100)/100, invertido, rendimiento };
-        }).filter(p=>p.valor>0);
-        if (puntos.length>0&&valorActualIol>0) { const ultimoValor=puntos[puntos.length-1].valor; if(ultimoValor>0){const factor=valorActualIol/ultimoValor; puntos.forEach(p=>{p.valor=Math.round(p.valor*factor*100)/100;p.rendimiento=p.invertido>0?+((p.valor-p.invertido)/p.invertido*100).toFixed(2):0;});} }
+
+          prevValor = valor;
+          puntos.push({ fecha, valor: Math.round(valor * 100) / 100, invertido, rendimiento: +((twrFactor - 1) * 100).toFixed(2) });
+        }
+
+        // Anclar el último valor al valor actual real (compensa precios con lag)
+        if (puntos.length > 0 && valorActualIol > 0) {
+          const ultimoValor = puntos[puntos.length - 1].valor;
+          if (ultimoValor > 0) {
+            const factor = valorActualIol / ultimoValor;
+            puntos.forEach(p => { p.valor = Math.round(p.valor * factor * 100) / 100; });
+          }
+        }
         const diaAntes = new Date(primeraFecha+'T12:00:00'); diaAntes.setDate(diaAntes.getDate()-1);
         setDatos([{fecha:diaAntes.toISOString().split('T')[0],valor:0,invertido:0,rendimiento:0},...puntos]);
       } catch { setError('Error al cargar los datos históricos.'); }
@@ -824,7 +858,9 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
   const capitalInvertido = fin.invertido;
   const primerPunto = datos.find(p=>p.valor>0);
   const anos = primerPunto && primerPunto.fecha ? (Date.now() - new Date(primerPunto.fecha+'T00:00:00').getTime())/(365.25*86400000) : 0;
-  const cagr = (primerPunto?.valor && fin.valor>0 && anos>0.01) ? ((Math.pow(fin.valor/primerPunto.valor, 1/anos)-1)*100) : null;
+  // CAGR basado en TWR: anualiza el rendimiento puro de inversiones
+  const twrTotal = rendimientoActual / 100 + 1;
+  const cagr = (twrTotal > 0 && anos > 0.01) ? ((Math.pow(twrTotal, 1 / anos) - 1) * 100) : null;
   const primeraCompraFecha = operaciones.filter(o=>o.tipo==='compra').sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]?.fecha;
   const xAxisProps = { dataKey:'fecha', tick:{fill:'var(--muted2)',fontSize:9,fontFamily:'DM Mono, monospace'}, tickFormatter:(v:string)=>{const d=new Date(v+'T00:00:00');return `${d.toLocaleString('es-AR',{month:'short'})} ${d.getFullYear().toString().slice(2)}`;}, interval:'preserveStartEnd' as const };
   const tooltipStyle = { background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'8px',fontSize:'12px',fontFamily:'DM Mono, monospace',color:'var(--text)' };
@@ -834,9 +870,9 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
   return (
     <div style={{ display:'flex',flexDirection:'column',gap:'16px' }}>
       <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(3, 1fr)',gap:'12px' }}>
-        <MetricaCard label="RETORNO TOTAL" small value={(rendimientoActual>=0?'+':'')+rendimientoActual.toFixed(2)+'%'} valueColor={colorV(rendimientoActual)} sub="Vs. capital invertido" />
-        <MetricaCard label="CAPITAL INVERTIDO" small value={fmtUSD(capitalInvertido)} valueColor="var(--text)" sub="Base de comparación" />
-        <MetricaCard label="CAGR" small value={cagr!==null?(cagr>=0?'+':'')+cagr.toFixed(2)+'%':'—'} valueColor={cagr!==null?colorV(cagr):'var(--muted)'} sub={cagr!==null&&anos>0?`Años: ${anos.toFixed(2)}`:"Período muy corto"} />
+        <MetricaCard label="RETORNO TWR" small value={(rendimientoActual>=0?'+':'')+rendimientoActual.toFixed(2)+'%'} valueColor={colorV(rendimientoActual)} sub="Sin efecto de nuevas inversiones" />
+        <MetricaCard label="CAPITAL INVERTIDO" small value={fmtUSD(capitalInvertido)} valueColor="var(--text)" sub="Costo neto de posiciones" />
+        <MetricaCard label="CAGR TWR" small value={cagr!==null?(cagr>=0?'+':'')+cagr.toFixed(2)+'%':'—'} valueColor={cagr!==null?colorV(cagr):'var(--muted)'} sub={cagr!==null&&anos>0?`Años: ${anos.toFixed(2)}`:"Período muy corto"} />
       </div>
       <div className="card">
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px' }}>
@@ -859,7 +895,7 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
       </div>
       <div className="card">
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px' }}>
-          <div><div className="label-xs" style={{ marginBottom:'4px' }}>📈 Rendimiento acumulado</div></div>
+          <div><div className="label-xs" style={{ marginBottom:'4px' }}>📈 Rendimiento acumulado (TWR)</div><div style={{ fontSize:'12px',color:'var(--muted)' }}>Aislado de nuevas incorporaciones de capital</div></div>
           <div style={{ textAlign:'right' }}><div style={{ fontFamily:'DM Mono, monospace',fontSize:'18px',fontWeight:700,color:colorV(rendimientoActual) }}>{rendimientoActual>=0?'+':''}{rendimientoActual.toFixed(2)}%</div></div>
         </div>
         <ResponsiveContainer width="100%" height={chartH}>
