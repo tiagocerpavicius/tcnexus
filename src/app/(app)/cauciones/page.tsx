@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Trash2, RefreshCw, Check, X, ChevronRight, ChevronDown, Pencil, TrendingDown } from 'lucide-react';
+import { Trash2, RefreshCw, Check, X, ChevronRight, ChevronDown, Pencil, TrendingDown, Calendar } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { supabase } from '@/lib/supabase';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -18,7 +18,7 @@ interface CaucionPeriodo {
 interface Activo {
   id: string; ticker: string; tipo: string; cantidad: number;
   precioCompra: number; precioActual: number;
-  precioVenta?: number; fechaVenta?: string; moneda: Moneda;
+  fechaCompra?: string; precioVenta?: number; fechaVenta?: string; moneda: Moneda;
 }
 
 function calcVencimiento(fechaInicio: string, plazo: number): string {
@@ -69,7 +69,7 @@ function rowToPeriodo(r: any): CaucionPeriodo {
   return { id: r.id, caucionId: r.caucion_id, monto: r.monto, tna: r.tna, plazo: r.plazo, fechaInicio: r.fecha_inicio, intereses: r.intereses };
 }
 function rowToActivo(r: any): Activo {
-  return { id: r.id, ticker: r.ticker, tipo: r.tipo || 'cedear', cantidad: r.cantidad, precioCompra: r.precio_compra, precioActual: r.precio_actual, precioVenta: r.precio_venta ?? undefined, fechaVenta: r.fecha_venta ?? undefined, moneda: r.moneda || 'USD' };
+  return { id: r.id, ticker: r.ticker, tipo: r.tipo || 'cedear', cantidad: r.cantidad, precioCompra: r.precio_compra, precioActual: r.precio_actual, fechaCompra: r.fecha_compra ?? undefined, precioVenta: r.precio_venta ?? undefined, fechaVenta: r.fecha_venta ?? undefined, moneda: r.moneda || 'USD' };
 }
 
 const TIPO_ACTIVO_OPTS = [
@@ -283,11 +283,13 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
   onDelete: (id: string) => Promise<void>;
 }) {
   const isMobile = useIsMobile();
-  const EMPTY = { ticker: '', tipo: monedaActiva === 'USD' ? 'cedear' : 'lecap', cantidad: '', precioCompra: '', precioActual: '' };
+  const EMPTY = { ticker: '', tipo: monedaActiva === 'USD' ? 'cedear' : 'lecap', cantidad: '', precioCompra: '', precioActual: '', fechaCompra: new Date().toISOString().split('T')[0] };
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editPrecio, setEditPrecio] = useState('');
+  const [editingFecha, setEditingFecha] = useState<string | null>(null);
+  const [editFechaValue, setEditFechaValue] = useState('');
   const [selling, setSelling] = useState<string | null>(null);
   const [sellData, setSellData] = useState({ precio: '', fecha: new Date().toISOString().split('T')[0] });
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -318,7 +320,7 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); if (!form.ticker || !form.cantidad || !form.precioCompra || !form.precioActual) return;
-    setSaving(true); await onAdd({ ticker: form.ticker.toUpperCase(), tipo: form.tipo, cantidad: Number(form.cantidad), precioCompra: Number(form.precioCompra), precioActual: Number(form.precioActual), moneda: monedaActiva });
+    setSaving(true); await onAdd({ ticker: form.ticker.toUpperCase(), tipo: form.tipo, cantidad: Number(form.cantidad), precioCompra: Number(form.precioCompra), precioActual: Number(form.precioActual), fechaCompra: form.fechaCompra || new Date().toISOString().split('T')[0], moneda: monedaActiva });
     setForm(EMPTY); setSaving(false);
   };
 
@@ -384,6 +386,7 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
             <div><label style={ls}>Cantidad</label><input className="input-field" type="number" step="0.01" placeholder="100" value={form.cantidad} onChange={e => set('cantidad', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
             <div><label style={ls}>P. compra</label><input className="input-field" type="number" step="0.0001" placeholder="18.50" value={form.precioCompra} onChange={e => set('precioCompra', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
             <div><label style={ls}>P. actual</label><input className="input-field" type="number" step="0.0001" placeholder="19.20" value={form.precioActual} onChange={e => set('precioActual', e.target.value)} required style={{ fontFamily: 'DM Mono, monospace' }} /></div>
+            <div><label style={ls}>Fecha compra</label><input className="input-field" type="date" value={form.fechaCompra} onChange={e => set('fechaCompra', e.target.value)} /></div>
           </div>
           {form.precioCompra && form.precioActual && form.cantidad && (
             <div style={{ marginBottom: '12px', padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '8px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
@@ -442,12 +445,17 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
                 {abiertas.map(a => {
                   const pnl = calcPnL(a.precioCompra, a.precioActual, a.cantidad);
                   const pnlPct = calcPnLPct(a.precioCompra, a.precioActual);
-                  const isEditing = editing === a.id; const isSelling = selling === a.id;
+                  const isEditing = editing === a.id; const isSelling = selling === a.id; const isEditingFecha = editingFecha === a.id;
                   return (
                     <tr key={a.id} style={{ borderBottom: '1px solid var(--border)' }}
                       onMouseOver={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
                       onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
-                      <td style={{ padding: '10px 10px' }}><span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--violet-light)', fontSize: '13px' }}>{a.ticker}</span></td>
+                      <td style={{ padding: '10px 10px' }}>
+                        <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--violet-light)', fontSize: '13px' }}>{a.ticker}</span>
+                        <div style={{ fontSize: '10px', color: a.fechaCompra ? 'var(--muted)' : 'var(--amber)', fontFamily: 'DM Mono, monospace', marginTop: '2px' }}>
+                          {a.fechaCompra ? a.fechaCompra : '⚠ sin fecha'}
+                        </div>
+                      </td>
                       <td style={{ padding: '10px 10px', textAlign: 'right' }}><span style={{ fontSize: '9px', background: 'rgba(124,58,237,0.15)', color: 'var(--violet-light)', borderRadius: '4px', padding: '1px 5px' }}>{TIPO_ACTIVO_OPTS.find(o => o.value === a.tipo)?.label || a.tipo}</span></td>
                       {!isMobile && <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtNum(a.cantidad, 2)}</td>}
                       <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--muted2)' }}>{fmtM(a.precioCompra, monedaActiva, 4)}</td>
@@ -468,6 +476,12 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
                             <button onClick={async () => { if (!sellData.precio) return; await onUpdate(a.id, { precioVenta: Number(sellData.precio), fechaVenta: sellData.fecha }); setSelling(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--green)', padding: '2px', display: 'flex', alignItems: 'center' }}><Check size={13} /></button>
                             <button onClick={() => setSelling(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px', display: 'flex', alignItems: 'center' }}><X size={13} /></button>
                           </div>
+                        ) : isEditingFecha ? (
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', justifyContent: 'flex-end' }}>
+                            <input type="date" value={editFechaValue} onChange={e => setEditFechaValue(e.target.value)} style={{ background: 'var(--surface2)', border: '1px solid var(--violet)', borderRadius: '6px', padding: '3px 6px', color: 'var(--text)', fontFamily: 'DM Mono, monospace', fontSize: '11px' }} />
+                            <button onClick={async () => { await onUpdate(a.id, { fechaCompra: editFechaValue }); setEditingFecha(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--green)', padding: '2px', display: 'flex', alignItems: 'center' }}><Check size={13} /></button>
+                            <button onClick={() => setEditingFecha(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px', display: 'flex', alignItems: 'center' }}><X size={13} /></button>
+                          </div>
                         ) : isEditing ? (
                           <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
                             <button onClick={async () => { await onUpdate(a.id, { precioActual: Number(editPrecio) }); setEditing(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--green)', padding: '2px', display: 'flex', alignItems: 'center' }}><Check size={13} /></button>
@@ -475,8 +489,9 @@ function ActivosTab({ activos, monedaActiva, onAdd, onUpdate, onDelete }: {
                           </div>
                         ) : (
                           <div style={{ display: 'flex', gap: '3px', justifyContent: 'flex-end' }}>
-                            {iconBtn(() => { setEditing(a.id); setEditPrecio(String(a.precioActual)); setSelling(null); }, <Pencil size={13} />, 'var(--violet-light)')}
-                            {iconBtn(() => { setSelling(a.id); setSellData({ precio: String(a.precioActual), fecha: new Date().toISOString().split('T')[0] }); setEditing(null); }, <TrendingDown size={13} />, 'var(--amber)')}
+                            {iconBtn(() => { setEditing(a.id); setEditPrecio(String(a.precioActual)); setSelling(null); setEditingFecha(null); }, <Pencil size={13} />, 'var(--violet-light)')}
+                            {iconBtn(() => { setEditingFecha(a.id); setEditFechaValue(a.fechaCompra || new Date().toISOString().split('T')[0]); setEditing(null); setSelling(null); }, <Calendar size={13} />, 'var(--green)')}
+                            {iconBtn(() => { setSelling(a.id); setSellData({ precio: String(a.precioActual), fecha: new Date().toISOString().split('T')[0] }); setEditing(null); setEditingFecha(null); }, <TrendingDown size={13} />, 'var(--amber)')}
                             {confirmDelete === a.id ? (
                               <div style={{ display: 'flex', gap: '3px' }}>
                                 <button onClick={async () => { await onDelete(a.id); setConfirmDelete(null); }} style={{ background: 'var(--red)', color: '#fff', border: 'none', borderRadius: '4px', padding: '1px 7px', cursor: 'pointer', fontSize: '10px', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Sí</button>
@@ -713,7 +728,7 @@ export default function CaucionesPage() {
       setActivos(p => p.map(a => a.id === existing.id ? { ...a, cantidad: totalCantidad, precioCompra: precioPromedio, precioActual: data.precioActual } : a));
     } else {
       const id = genId();
-      const { data: row } = await supabase.from('cedears_arb').insert({ id, user_id: userId, ticker: data.ticker, tipo: data.tipo, cantidad: data.cantidad, precio_compra: data.precioCompra, precio_actual: data.precioActual, moneda: data.moneda }).select().single();
+      const { data: row } = await supabase.from('cedears_arb').insert({ id, user_id: userId, ticker: data.ticker, tipo: data.tipo, cantidad: data.cantidad, precio_compra: data.precioCompra, precio_actual: data.precioActual, fecha_compra: data.fechaCompra ?? new Date().toISOString().split('T')[0], moneda: data.moneda }).select().single();
       if (row) setActivos(p => [...p, rowToActivo(row)]);
     }
   }, [userId, activos]);
@@ -724,6 +739,7 @@ export default function CaucionesPage() {
     if (data.precioActual !== undefined) updates.precio_actual = data.precioActual;
     if (data.precioVenta !== undefined) updates.precio_venta = data.precioVenta;
     if (data.fechaVenta !== undefined) updates.fecha_venta = data.fechaVenta;
+    if (data.fechaCompra !== undefined) updates.fecha_compra = data.fechaCompra;
     if (data.cantidad !== undefined) updates.cantidad = data.cantidad;
     await supabase.from('cedears_arb').update(updates).eq('id', id).eq('user_id', userId);
     setActivos(p => p.map(a => a.id === id ? { ...a, ...data } : a));

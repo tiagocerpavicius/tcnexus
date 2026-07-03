@@ -42,6 +42,10 @@ interface OpImportada {
 interface MepHistoryEntry {
   fecha: string; venta: number;
 }
+interface CaucionActivoSimple {
+  id: string; ticker: string; tipo: string; cantidad: number;
+  precioCompra: number; precioActual: number; moneda: 'USD' | 'ARS';
+}
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -556,13 +560,52 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 
 // ── Tab: Posiciones ───────────────────────────────────────────────────────────
 
-function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number }) {
+function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], caucionesTomadasUSD = 0, caucionesTomadasARS = 0 }: {
+  posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number;
+  caucionActivos?: CaucionActivoSimple[]; caucionesTomadasUSD?: number; caucionesTomadasARS?: number;
+}) {
   const [verUSD, setVerUSD] = useState(false);
-  const totalActivosUSD = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
-  const valorTotalUSD = totalActivosUSD + efectivoUSD;
-  const totalCostoUSD = posiciones.reduce((s, p) => s + p.costoTotalUSD, 0);
-  const totalPnlUSD = posiciones.reduce((s, p) => s + (p.pnlUSD || 0), 0);
-  const totalRentasUSD = posiciones.reduce((s, p) => s + p.pnlRentas, 0);
+
+  // Merge caucion activos con posiciones de portfolio (promedia PPC del mismo ticker)
+  const posicionesMerged: PosicionCompleta[] = posiciones.map(p => ({ ...p }));
+  for (const ca of caucionActivos) {
+    const ticker = normalizarTicker(ca.ticker);
+    const costoUSD = ca.moneda === 'USD' ? ca.precioCompra : ca.precioCompra / mep;
+    const actualUSD = ca.moneda === 'USD' ? ca.precioActual : ca.precioActual / mep;
+    const caValor = actualUSD * ca.cantidad;
+    const caCosto = costoUSD * ca.cantidad;
+    const idx = posicionesMerged.findIndex(p => p.ticker === ticker);
+    if (idx >= 0) {
+      const p = posicionesMerged[idx];
+      const newCantidad = p.cantidad + ca.cantidad;
+      const newCosto = p.costoTotalUSD + caCosto;
+      const newValor = p.valorActualUSD != null ? p.valorActualUSD + (p.valorActualUSD / p.cantidad) * ca.cantidad : null;
+      posicionesMerged[idx] = {
+        ...p, cantidad: newCantidad, costoTotalUSD: newCosto,
+        costoPromedioUSD: newCantidad > 0 ? newCosto / newCantidad : 0,
+        valorActualUSD: newValor,
+        pnlUSD: newValor != null ? newValor - newCosto : null,
+        pnlPct: newValor != null && newCosto > 0 ? ((newValor - newCosto) / newCosto) * 100 : null,
+      };
+    } else {
+      posicionesMerged.push({
+        ticker, tickerBuscar: ca.ticker, nombre: ca.ticker,
+        tipo_activo: ca.tipo, broker: 'CAUCION', moneda: ca.moneda,
+        cantidad: ca.cantidad, costoTotalUSD: caCosto, costoPromedioUSD: costoUSD,
+        precioActual: ca.precioActual, valorActualUSD: caValor,
+        pnlUSD: caValor - caCosto,
+        pnlPct: caCosto > 0 ? ((caValor - caCosto) / caCosto) * 100 : null,
+        variacionDiaria: null, pnlRentas: 0, loadingPrecio: false,
+      });
+    }
+  }
+
+  const totalActivosUSD = posicionesMerged.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
+  const caucionesTomadasTotalUSD = caucionesTomadasUSD + caucionesTomadasARS / mep;
+  const valorTotalUSD = totalActivosUSD + efectivoUSD - caucionesTomadasTotalUSD;
+  const totalCostoUSD = posicionesMerged.reduce((s, p) => s + p.costoTotalUSD, 0);
+  const totalPnlUSD = posicionesMerged.reduce((s, p) => s + (p.pnlUSD || 0), 0);
+  const totalRentasUSD = posicionesMerged.reduce((s, p) => s + p.pnlRentas, 0);
   const totalPnlPct = totalCostoUSD > 0 ? (totalPnlUSD / totalCostoUSD) * 100 : 0;
   const conv = (usd: number | null) => usd == null ? null : verUSD ? usd : usd * mep;
   const fmtVal = (usd: number | null) => { const v = conv(usd); return v == null ? '—' : verUSD ? fmtUSD(v) : fmtARS(v); };
@@ -576,7 +619,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-        <div style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{posiciones.length} posiciones · MEP ${mep.toLocaleString('es-AR')}</div>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>{posicionesMerged.length} posiciones · MEP ${mep.toLocaleString('es-AR')}</div>
         <div style={{ display: 'flex', gap: '4px', background: 'var(--surface)', borderRadius: '8px', padding: '3px' }}>
           <button onClick={() => setVerUSD(false)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: !verUSD ? 'var(--violet)' : 'transparent', color: !verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>ARS</button>
           <button onClick={() => setVerUSD(true)} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'DM Mono, monospace', fontSize: '12px', fontWeight: 600, background: verUSD ? 'var(--violet)' : 'transparent', color: verUSD ? '#fff' : 'var(--muted2)', transition: 'all 0.15s' }}>USD</button>
@@ -592,10 +635,10 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
             </tr>
           </thead>
           <tbody>
-            {posiciones.map((p, i) => {
+            {posicionesMerged.map((p, i) => {
               const pnlTotal = (p.pnlUSD || 0) + p.pnlRentas;
               return (
-                <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
+                <tr key={p.ticker + '-' + i} style={{ borderBottom: '1px solid var(--border)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
                   <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: i%2===0?'var(--surface)':'var(--surface)', zIndex: 1 }}>
                     <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap' }}>{p.ticker}</div>
                     <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}>{p.nombre !== p.ticker ? p.nombre : ''}</div>
@@ -630,6 +673,38 @@ function TabPosiciones({ posiciones, efectivoUSD, mep }: { posiciones: PosicionC
                 <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
                 <td colSpan={2} />
                 <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
+                <td />
+              </tr>
+            )}
+            {caucionesTomadasUSD > 0 && (
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(245,158,11,0.04)' }}>
+                <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
+                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--amber)', whiteSpace: 'nowrap' }}>Caución Tomada</div>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>USD · Capital prestado</div>
+                </td>
+                <td colSpan={3} />
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                  -{verUSD ? fmtUSD(caucionesTomadasUSD) : fmtARS(caucionesTomadasUSD*mep)}
+                </td>
+                <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
+                <td colSpan={2} />
+                <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--amber)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Caución</span></td>
+                <td />
+              </tr>
+            )}
+            {caucionesTomadasARS > 0 && (
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(245,158,11,0.04)' }}>
+                <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
+                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--amber)', whiteSpace: 'nowrap' }}>Caución Tomada</div>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>ARS · Capital prestado</div>
+                </td>
+                <td colSpan={3} />
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--amber)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                  -{verUSD ? fmtUSD(caucionesTomadasARS/mep) : fmtARS(caucionesTomadasARS)}
+                </td>
+                <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
+                <td colSpan={2} />
+                <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--amber)', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Caución</span></td>
                 <td />
               </tr>
             )}
@@ -781,13 +856,28 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
           try { const base = normalizarTicker(ticker); const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=2y`); const data = await res.json(); if (!data.error && data.historico?.length) historicos[ticker] = data.historico; } catch {}
         }));
         if (!Object.keys(historicos).length) { setError('No se pudo obtener datos históricos.'); setLoading(false); return; }
-        const primeraFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
+
+        // Traer activos de cauciones con fecha de compra para incluirlos en el TWR
+        const { data: caucionRows } = await supabase.from('cedears_arb').select('ticker,tipo,cantidad,precio_compra,fecha_compra,precio_venta,fecha_venta,moneda');
+        const caucionActivos = (caucionRows || []).filter((a: any) => a.fecha_compra);
+        // Fetch precios históricos para tickers de cauciones que no estén ya cargados
+        const caucionTickers = Array.from(new Set(caucionActivos.map((a: any) => (a.ticker || '').toUpperCase())));
+        await Promise.all(caucionTickers.map(async (ticker: string) => {
+          if (historicos[ticker]) return;
+          try { const base = normalizarTicker(ticker); const res = await fetch(`/api/historico?ticker=${base}&suffix=&range=2y`); const data = await res.json(); if (!data.error && data.historico?.length) historicos[ticker] = data.historico; } catch {}
+        }));
+
+        const primeraFechaOps = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
+        const primeraFechaCauc = caucionActivos.length > 0 ? caucionActivos.map((a: any) => a.fecha_compra).sort()[0] : null;
+        const primeraFecha = primeraFechaCauc && primeraFechaCauc < primeraFechaOps ? primeraFechaCauc : primeraFechaOps;
+
         const allDates = new Set<string>();
         Object.values(historicos).forEach(h=>h.forEach(p=>allDates.add(p.fecha)));
         operaciones.filter(o=>['compra','venta','deposito','retiro'].includes(o.tipo)).forEach(o=>allDates.add(o.fecha));
+        caucionActivos.forEach((a: any) => { if (a.fecha_compra) allDates.add(a.fecha_compra); if (a.fecha_venta) allDates.add(a.fecha_venta); });
         const sortedDates = Array.from(allDates).sort().filter(d=>d>=primeraFecha);
 
-        // Calcula el valor de mercado de las posiciones (sin efectivo) en una fecha dada
+        // Calcula el valor de mercado de posiciones portfolio + cauciones en una fecha dada
         const valorPosiciones = (ops: Operacion[], atFecha: string): number => {
           const posMap = calcularPosicionesBase(ops, mep, mepHistory);
           let v = 0;
@@ -799,6 +889,22 @@ function TabHistorial({ operaciones, mep, mepHistory, valorActualIol }: { operac
               v += pos.cantidad * (esArg ? precioFecha / getMepForDate(atFecha, mep, mepHistory) : precioFecha);
             } else {
               v += pos.costoTotalUSD;
+            }
+          }
+          // Posiciones de cauciones activas en esta fecha
+          for (const ca of caucionActivos) {
+            if (!ca.fecha_compra || ca.fecha_compra > atFecha) continue;
+            if (ca.fecha_venta && ca.fecha_venta <= atFecha) continue;
+            const ticker = (ca.ticker || '').toUpperCase();
+            const h = historicos[ticker];
+            const precioFecha = h?.filter((p: any) => p.fecha <= atFecha).at(-1)?.cierre;
+            const mepFecha = getMepForDate(atFecha, mep, mepHistory);
+            const costoUSD = (ca.moneda || 'USD') === 'USD' ? ca.precio_compra : ca.precio_compra / mepFecha;
+            if (precioFecha != null) {
+              const esArg = ['accion_ar','bono','on'].includes(ca.tipo || '');
+              v += ca.cantidad * (esArg ? precioFecha / mepFecha : precioFecha);
+            } else {
+              v += ca.cantidad * costoUSD;
             }
           }
           return v;
@@ -1277,6 +1383,9 @@ export default function PortfolioPage() {
   const [xirr, setXirr] = useState<number|null>(null);
   const [netoCaucionesUSD, setNetoCaucionesUSD] = useState<number|null>(null);
   const [netoCaucionesARS, setNetoCaucionesARS] = useState<number|null>(null);
+  const [caucionActivos, setCaucionActivos] = useState<CaucionActivoSimple[]>([]);
+  const [caucionesTomadasUSD, setCaucionesTomadasUSD] = useState(0);
+  const [caucionesTomadasARS, setCaucionesTomadasARS] = useState(0);
 
   useEffect(() => {
     fetch('/api/dolar').then(r=>r.json()).then((data:any[])=>{
@@ -1295,10 +1404,14 @@ export default function PortfolioPage() {
 
   const loadNetoCauciones = useCallback(async () => {
     try {
-      const [caucRes, perRes, actRes] = await Promise.all([supabase.from('cauciones').select('id,monto,tna,plazo,moneda'), supabase.from('caucion_periodos').select('caucion_id,intereses'), supabase.from('cedears_arb').select('precio_compra,precio_actual,precio_venta,cantidad,moneda')]);
+      const [caucRes, perRes, actRes] = await Promise.all([
+        supabase.from('cauciones').select('id,monto,tna,plazo,moneda'),
+        supabase.from('caucion_periodos').select('caucion_id,intereses'),
+        supabase.from('cedears_arb').select('id,ticker,tipo,precio_compra,precio_actual,precio_venta,cantidad,moneda'),
+      ]);
       if (!caucRes.data||!perRes.data||!actRes.data) return;
       const costosPorCaucion: Record<string,number> = {};
-      perRes.data.forEach(p=>{ costosPorCaucion[p.caucion_id]=(costosPorCaucion[p.caucion_id]||0)+p.intereses; });
+      perRes.data.forEach((p:any)=>{ costosPorCaucion[p.caucion_id]=(costosPorCaucion[p.caucion_id]||0)+p.intereses; });
       const calcNeto = (moneda:string) => {
         const caucs=caucRes.data!.filter((c:any)=>(c.moneda||'USD')===moneda);
         const acts=actRes.data!.filter((a:any)=>(a.moneda||'USD')===moneda);
@@ -1307,6 +1420,16 @@ export default function PortfolioPage() {
         return pnl-costo;
       };
       setNetoCaucionesUSD(calcNeto('USD')); setNetoCaucionesARS(calcNeto('ARS'));
+      // Posiciones abiertas para mostrar en portfolio
+      const abiertas = actRes.data.filter((a:any) => !a.precio_venta);
+      setCaucionActivos(abiertas.map((r:any) => ({
+        id: r.id, ticker: (r.ticker||'').toUpperCase(), tipo: r.tipo||'cedear',
+        cantidad: r.cantidad, precioCompra: r.precio_compra,
+        precioActual: r.precio_actual, moneda: r.moneda||'USD',
+      })));
+      // Total tomado por moneda
+      setCaucionesTomadasUSD(caucRes.data.filter((c:any)=>(c.moneda||'USD')==='USD').reduce((s:number,c:any)=>s+c.monto,0));
+      setCaucionesTomadasARS(caucRes.data.filter((c:any)=>(c.moneda||'USD')==='ARS').reduce((s:number,c:any)=>s+c.monto,0));
     } catch {}
   }, []);
 
@@ -1453,7 +1576,7 @@ export default function PortfolioPage() {
           </div>
 
           {tab==='resumen'      && <TabResumen posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
-          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} />}
+          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} />}
           {tab==='mapa'         && <TabMapa posiciones={posiciones} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
           {tab==='performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
