@@ -378,8 +378,8 @@ function parseIOL(html: string, mep: number, mepHistory: MepHistoryEntry[] = [])
     if (esCash) {
       const row = rows[0]; const montoARS = parseIOLMonto(row['Monto']); if (!montoARS) continue;
       moneda = (row['Tipo Cuenta'] || '').toLowerCase().includes('dolar') ? 'USD' : 'ARS';
-      monto_usd = moneda === 'USD' ? montoARS : montoARS / mep;
       fecha = parseIOLDate(row['Concert.'] || row['Liquid.']);
+      monto_usd = moneda === 'USD' ? montoARS : montoARS / getMepForDate(fecha, mep, mepHistory);
     } else {
       const usdRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Dolares') && parseIOLMonto(r['Monto']) > 0);
       const arsRow = rows.find(r => (r['Tipo Cuenta'] || '').includes('Pesos') && parseIOLMonto(r['Monto']) > 0);
@@ -475,7 +475,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     const importe = row['Importe'] || 0;
     const monedaStr = String(row['Moneda']||'');
     const esUSD = monedaStr.includes('Dólar') || monedaStr.includes('Dollar');
-    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / mep;
+    const monto_usd = esUSD ? Math.abs(importe) : Math.abs(importe) / getMepForDate(fecha, mep, mepHistory);
     const moneda: 'USD'|'ARS' = esUSD ? 'USD' : 'ARS';
 
     // 1. Traspaso saliente de títulos (Transferencia Externa Débito)
@@ -489,7 +489,7 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     if (/^Amortizaci[oó]n\s*\/\s*.+/i.test(desc) && ticker && importe > 0) {
       const cantidad = Math.abs(row['Cantidad']||0); if (!cantidad) continue;
       const montoARS = importe; // en pesos
-      const montoParsed = montoARS / mep;
+      const montoParsed = montoARS / getMepForDate(fecha, mep, mepHistory);
       const precioUnit = cantidad > 0 ? montoARS / cantidad : null;
       result.push({ importId: `BAL-AMORT-${fecha}-${ticker}`, fecha, ticker, nombre: ticker, tipo: 'venta', cantidad, precio_unitario: precioUnit, monto_usd: montoParsed, moneda: 'ARS', tipo_activo: 'bono', broker: 'Balanz', notas: 'amortizacion' });
       continue;
@@ -956,7 +956,7 @@ function ModalAgregarOp({ mep, mepHistory, onClose, onSave }: { mep: number; mep
           <div style={{ gridColumn:'1 / -1' }}><div className="label-xs" style={ls}>Notas</div><input className="input-field" placeholder="Opcional..." value={notas} onChange={e=>setNotas(e.target.value)} /></div>
         </div>
         {montoUSDPreview>0&&(<div style={{ marginTop:'12px',padding:'10px 14px',background:'rgba(124,58,237,0.06)',border:'1px solid rgba(124,58,237,0.2)',borderRadius:'8px',display:'flex',justifyContent:'space-between',alignItems:'center' }}><span style={{ fontSize:'13px',color:'var(--text2)' }}>Equivalente USD</span><span style={{ fontFamily:'DM Mono, monospace',fontSize:'15px',fontWeight:600,color:'var(--violet-light)' }}>{fmtUSD(montoUSDPreview)}</span></div>)}
-        {moneda==='ARS'&&<div style={{ marginTop:'6px',fontSize:'11px',color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>MEP actual: ${mep.toLocaleString('es-AR')}</div>}
+        {moneda==='ARS'&&<div style={{ marginTop:'6px',fontSize:'11px',color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>MEP {fecha}: ${getMepForDate(fecha, mep, mepHistory).toLocaleString('es-AR')}</div>}
         <div style={{ display:'flex',gap:'10px',marginTop:'20px' }}>
           <button onClick={onClose} style={{ flex:1,background:'var(--surface2)',border:'1px solid var(--border)',color:'var(--text2)',borderRadius:'8px',padding:'10px',cursor:'pointer',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'14px' }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving||!canSave} className="btn-primary" style={{ flex:2,padding:'10px',fontSize:'14px' }}>{saving?'Guardando...':'Guardar'}</button>
@@ -1025,7 +1025,7 @@ function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, 
                   </table>
                 </div>
               </div>
-              <div style={{ fontSize:'11px',color:'var(--muted)',fontFamily:'DM Mono, monospace',marginBottom:'16px' }}>* ARS convertido a USD usando MEP (${mep.toLocaleString('es-AR')}). Traspasos heredan costo original del broker origen.</div>
+              <div style={{ fontSize:'11px',color:'var(--muted)',fontFamily:'DM Mono, monospace',marginBottom:'16px' }}>* ARS convertido a USD usando el MEP histórico de la fecha de cada operación. Traspasos heredan costo original del broker origen.</div>
               <div style={{ display:'flex',gap:'10px' }}><button onClick={onClose} style={{ flex:1,background:'var(--surface2)',border:'1px solid var(--border)',color:'var(--text2)',borderRadius:'8px',padding:'10px',cursor:'pointer',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'14px' }}>Cancelar</button><button onClick={handleSave} disabled={saving||!selectedOps.length} className="btn-primary" style={{ flex:2,padding:'10px',fontSize:'14px' }}>{saving?'Importando...':`Importar ${selectedOps.length}`}</button></div>
             </>)}
           </>
