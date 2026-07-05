@@ -185,9 +185,14 @@ function calcularPosicionesBase(ops: Operacion[], fallbackMep: number = 0, mepHi
       pos.cantidad += (op.cantidad || 0);
       pos.costoTotalUSD += getMontoUSDOperacion(op, fallbackMep, mepHistory);
     } else if (op.tipo === 'venta' && pos.cantidad > 0) {
-      const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
-      pos.costoTotalUSD *= (1 - pct);
-      pos.cantidad -= (op.cantidad || 0);
+      if (op.notas === 'amortizacion') {
+        // Amortización: no cambia cantidad ni costo — los nominales son los mismos,
+        // solo baja el precio de mercado. El cobro se registra como renta del bono.
+      } else {
+        const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
+        pos.costoTotalUSD *= (1 - pct);
+        pos.cantidad -= (op.cantidad || 0);
+      }
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && pos.cantidad > 0) {
       const qty = Math.min(op.cantidad || 0, pos.cantidad);
       const costPerUnit = pos.cantidad > 0 ? pos.costoTotalUSD / pos.cantidad : 0;
@@ -250,12 +255,14 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
       const cantVendida = Math.min(op.cantidad || 0, base.cantidad);
       const pct = cantVendida / base.cantidad;
       const costoVendido = base.costoTotal * pct;
+      base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
+      // Amortizaciones son devolución de capital, no P&L realizado — no se registran como ganancia/pérdida
+      if (op.notas === 'amortizacion') continue;
       const ganancia = getMontoUSDOperacion(op, fallbackMep, mepHistory) - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
       real.montoVentaUSD += op.monto_usd; real.costoRealizadoUSD += costoVendido;
       real.gananciaUSD += ganancia; real.cantidadVendida += cantVendida;
-      base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
     } else if (op.tipo === 'traspaso' && op.notas === 'out' && base.cantidad > 0) {
       const qty = Math.min(op.cantidad || 0, base.cantidad);
       const costPerUnit = base.cantidad > 0 ? base.costoTotal / base.cantidad : 0;
@@ -631,7 +638,7 @@ function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], cauc
         <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-              {['Activo', 'Precio', 'Cant.', 'Costo Prom.', 'Valor Actual', 'P&L Precio', 'P&L Rentas', 'P&L Total', 'P&L %', 'Var. Hoy', 'Tipo', 'Broker'].map(h => (
+              {['Activo', 'Precio', 'Cant.', 'Costo Prom.', 'Valor Actual', 'P&L Precio', 'Rentas/Amort.', 'P&L Total', 'P&L %', 'Var. Hoy', 'Tipo', 'Broker'].map(h => (
                 <th key={h} style={{ padding: '10px 12px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Activo' ? 'left' : 'right', whiteSpace: 'nowrap', fontSize: '11px' }}>{h}</th>
               ))}
             </tr>
@@ -1683,11 +1690,15 @@ export default function PortfolioPage() {
     const totalInv = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
-    // Rentas/dividendos recibidos por ticker
+    // Rentas/dividendos y amortizaciones recibidas por ticker
     const rentasByTicker = new Map<string, number>();
     for (const op of ops.filter(o => o.tipo === 'dividendo')) {
       const key = normalizarTicker(op.ticker);
       rentasByTicker.set(key, (rentasByTicker.get(key) || 0) + op.monto_usd);
+    }
+    for (const op of ops.filter(o => o.tipo === 'venta' && o.notas === 'amortizacion')) {
+      const key = normalizarTicker(op.ticker);
+      rentasByTicker.set(key, (rentasByTicker.get(key) || 0) + getMontoUSDOperacion(op, mepRate, mepHistoryData));
     }
 
     const posArray: PosicionCompleta[] = Array.from(posMap.values()).map(pos => ({ ...pos, costoPromedioUSD: pos.cantidad>0?pos.costoTotalUSD/pos.cantidad:0, precioActual:null, valorActualUSD:null, pnlUSD:null, pnlPct:null, variacionDiaria:null, pnlRentas: rentasByTicker.get(normalizarTicker(pos.ticker)) || 0, loadingPrecio:true }));
