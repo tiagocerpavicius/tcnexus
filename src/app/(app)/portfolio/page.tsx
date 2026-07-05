@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Plus, Trash2, RefreshCw, X, TrendingUp, TrendingDown, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { PieChart, Pie, Cell, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
@@ -1755,6 +1755,41 @@ export default function PortfolioPage() {
   const caucionesTomadasTotalUSD = caucionesTomadasUSD + caucionesTomadasARS / mep;
   const caucionesInteresTotalUSD = caucionesInteresUSD + caucionesInteresARS / mep;
   const valorTotalUSD = totalActivosUSD + efectivoUSD + caucionActivosValorUSD - caucionesTomadasTotalUSD - caucionesInteresTotalUSD;
+
+  // Posiciones mergeadas con cauciones — usadas en todos los tabs
+  const posicionesMerged = useMemo(() => {
+    const merged: PosicionCompleta[] = posiciones.map(p => ({ ...p }));
+    for (const ca of caucionActivos) {
+      const ticker = normalizarTicker(ca.ticker);
+      const costoUSD = ca.moneda === 'USD' ? ca.precioCompra : ca.precioCompra / mep;
+      const actualUSD = ca.moneda === 'USD' ? ca.precioActual : ca.precioActual / mep;
+      const caValor = actualUSD * ca.cantidad;
+      const caCosto = costoUSD * ca.cantidad;
+      const idx = merged.findIndex(p => p.ticker === ticker);
+      if (idx >= 0) {
+        const p = merged[idx];
+        const newCantidad = p.cantidad + ca.cantidad;
+        const newCosto = p.costoTotalUSD + caCosto;
+        const newValor = p.valorActualUSD != null ? p.valorActualUSD + (p.valorActualUSD / p.cantidad) * ca.cantidad : null;
+        merged[idx] = { ...p, cantidad: newCantidad, costoTotalUSD: newCosto,
+          costoPromedioUSD: newCantidad > 0 ? newCosto / newCantidad : 0,
+          valorActualUSD: newValor,
+          pnlUSD: newValor != null ? newValor - newCosto : null,
+          pnlPct: newValor != null && newCosto > 0 ? ((newValor - newCosto) / newCosto) * 100 : null,
+        };
+      } else {
+        merged.push({ ticker, tickerBuscar: ca.ticker, nombre: ca.ticker,
+          tipo_activo: ca.tipo, broker: 'CAUCION', moneda: ca.moneda,
+          cantidad: ca.cantidad, costoTotalUSD: caCosto, costoPromedioUSD: costoUSD,
+          precioActual: ca.precioActual, valorActualUSD: caValor,
+          pnlUSD: caValor - caCosto,
+          pnlPct: caCosto > 0 ? ((caValor - caCosto) / caCosto) * 100 : null,
+          variacionDiaria: null, pnlRentas: 0, loadingPrecio: false,
+        });
+      }
+    }
+    return merged;
+  }, [posiciones, caucionActivos, mep]);
   const gananciaNeta = valorTotalUSD - totalInvertidoUSD;
   const gananciaNetaPct = totalInvertidoUSD>0?(gananciaNeta/totalInvertidoUSD)*100:0;
   const variacionHoy = posiciones.reduce((s,p)=>{ if(p.variacionDiaria!=null&&p.valorActualUSD!=null)return s+p.valorActualUSD-(p.valorActualUSD/(1+p.variacionDiaria/100)); return s; }, 0);
@@ -1830,12 +1865,12 @@ export default function PortfolioPage() {
             ))}
           </div>
 
-          {tab==='resumen'      && <TabResumen posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
+          {tab==='resumen'      && <TabResumen posiciones={posicionesMerged} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
           {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} caucionesInteresUSD={caucionesInteresUSD} caucionesInteresARS={caucionesInteresARS} />}
-          {tab==='mapa'         && <TabMapa posiciones={posiciones} />}
-          {tab==='distribucion' && <TabDistribucion posiciones={posiciones} efectivoUSD={efectivoUSD} />}
-          {tab==='performance'  && <TabPerformance posiciones={posiciones} realizadas={realizadas} />}
-          {tab==='por-activo'   && <TabPorActivo posiciones={posiciones} operaciones={operaciones} realizadas={realizadas} mep={mep} mepHistory={mepHistory} />}
+          {tab==='mapa'         && <TabMapa posiciones={posicionesMerged} />}
+          {tab==='distribucion' && <TabDistribucion posiciones={posicionesMerged} efectivoUSD={efectivoUSD} />}
+          {tab==='performance'  && <TabPerformance posiciones={posicionesMerged} realizadas={realizadas} />}
+          {tab==='por-activo'   && <TabPorActivo posiciones={posicionesMerged} operaciones={operaciones} realizadas={realizadas} mep={mep} mepHistory={mepHistory} />}
           {tab==='historial'    && <TabHistorial operaciones={operaciones} mep={mep} mepHistory={mepHistory} valorActualIol={valorTotalUSD} />}
           {tab==='operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async(id)=>{await supabase.from('operaciones').delete().eq('id',id);await loadData(true);}} onImport={()=>setShowImport(true)} />}
         </>
