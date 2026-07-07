@@ -511,6 +511,86 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
   return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 
+// ── Max Capital Parser ────────────────────────────────────────────────────────
+
+function parseMaxCapitalXLSX(data: ArrayBuffer, mep: number, mepHistory: MepHistoryEntry[]): Omit<OpImportada, 'isDuplicate' | 'selected'>[] {
+  const wb = XLSX.read(data, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const result: Omit<OpImportada, 'isDuplicate' | 'selected'>[] = [];
+
+  const parseFecha = (v: string): string => {
+    if (!v || !/^\d{2}\/\d{2}\/\d{4}/.test(v)) return '';
+    const [d, m, y] = v.split('/');
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  };
+  const parsePrecio = (v: any): number | null => {
+    if (!v || v === '-') return null;
+    const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  };
+  const extractTicker = (instrumento: string): { ticker: string; nombre: string } => {
+    const m = instrumento.match(/ - ([A-Z0-9]+) \/\d+$/);
+    if (!m) return { ticker: '', nombre: instrumento };
+    const ticker = m[1];
+    const nombre = instrumento.slice(0, instrumento.lastIndexOf(` - ${ticker} /`)).replace(/"/g, '').trim();
+    return { ticker, nombre };
+  };
+  const instrToTipo = (instrumento: string): string | null => {
+    const u = instrumento.toUpperCase();
+    if (u.includes('AA.ORD') || u.includes('V.$.') || u.includes('ORD.')) return 'accion_ar';
+    if (u.includes('BONO') || u.includes('LT REP') || u.includes('TES. NAC') || u.includes('BOPREAL') || u.includes('LET ')) return 'bono';
+    if (u.includes(' ONS ') || u.includes(' ON ') || u.includes('OBLIGAC') || u.includes('NEGOCIABLE')) return 'on';
+    return null;
+  };
+
+  for (const row of rows) {
+    const detalle = String(row['Detalle'] || '');
+    if (!detalle || detalle.startsWith('Saldo')) continue;
+    if (/^Liquidaci[oó]n de (Suscripci[oó]n|Rescate)/.test(detalle)) continue;
+    if (/FICOMPRA|FIVENTA/.test(detalle)) continue;
+
+    const fecha = parseFecha(String(row['Concertación'] || ''));
+    if (!fecha) continue;
+
+    const instrumento = String(row['Instrumento'] || '');
+    const { ticker, nombre } = extractTicker(instrumento);
+    if (!ticker) continue;
+
+    const monedaStr = String(row['Moneda'] || '');
+    const moneda: 'ARS' | 'USD' = monedaStr.includes('USD') ? 'USD' : 'ARS';
+    const tipo_activo = detectTipoActivo(ticker, instrToTipo(instrumento));
+    // CEDEARs en segmento ARS usan sufijo 'D' en IOL/Balanz — lo agregamos para precio lookup consistente
+    const tickerFinal = (tipo_activo === 'cedear' && moneda === 'ARS' && !ticker.endsWith('D') && !NO_NORMALIZAR_D.has(ticker))
+      ? ticker + 'D' : ticker;
+
+    // Amortización
+    if (/^Amortizaci[oó]n/.test(detalle)) {
+      const cantidad = Math.abs(Number(row['Cantidad']) || 0);
+      const precio = parsePrecio(row['Precio']);
+      if (!cantidad || !precio) continue;
+      const montoARS = cantidad * precio;
+      const monto_usd = moneda === 'USD' ? montoARS : montoARS / getMepForDate(fecha, mep, mepHistory);
+      result.push({ importId: `MAX-AMORT-${fecha}-${tickerFinal}`, fecha, ticker: tickerFinal, nombre, tipo: 'venta', cantidad, precio_unitario: precio, monto_usd, moneda, tipo_activo, broker: 'Max Capital', notas: 'amortizacion' });
+      continue;
+    }
+
+    // Boleto COMPRA / VENTA
+    const bm = detalle.match(/^Boleto\s*\/\s*(\d+)\s*\/\s*(COMPRA|VENTA)\s*\//i);
+    if (!bm) continue;
+    const [, boleto, tipoStr] = bm;
+    const tipo = tipoStr.toLowerCase() as 'compra' | 'venta';
+    const cantidad = Math.abs(Number(row['Cantidad']) || 0);
+    const precio = parsePrecio(row['Precio']);
+    if (!cantidad || !precio) continue;
+    const importeBruto = Math.abs(Number(row['Importe bruto']) || 0);
+    const monto_usd = moneda === 'USD' ? importeBruto : importeBruto / getMepForDate(fecha, mep, mepHistory);
+    result.push({ importId: `MAX-${boleto}-${tipo === 'compra' ? 'C' : 'V'}-${moneda}`, fecha, ticker: tickerFinal, nombre, tipo, cantidad, precio_unitario: precio, monto_usd, moneda, tipo_activo, broker: 'Max Capital', notas: null });
+  }
+
+  return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
 // ── Duplicate detection ───────────────────────────────────────────────────────
 
 function isDuplicateOp(op: Omit<OpImportada, 'isDuplicate'|'selected'>, existing: Operacion[]): boolean {
@@ -1347,7 +1427,7 @@ function ModalAgregarOp({ mep, mepHistory, onClose, onSave }: { mep: number; mep
 // ── Modal: Importar desde broker ──────────────────────────────────────────────
 
 function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, onImport }: { operacionesExistentes: Operacion[]; mep: number; mepHistory: MepHistoryEntry[]; onClose: () => void; onImport: (ops: Omit<Operacion,'id'>[]) => Promise<void> }) {
-  const [broker, setBroker] = useState<'IOL'|'Balanz'>('IOL');
+  const [broker, setBroker] = useState<'IOL'|'Balanz'|'Max Capital'>('IOL');
   const [ops, setOps] = useState<OpImportada[]>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [saving, setSaving] = useState(false); const [saved, setSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const handleFile = useCallback(async (file: File) => {
@@ -1355,6 +1435,7 @@ function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, 
     try {
       let parsed: Omit<OpImportada,'isDuplicate'|'selected'>[] = [];
       if (broker==='IOL') { const text = await file.text(); parsed = parseIOL(text, mep, mepHistory); }
+      else if (broker==='Max Capital') { const buffer = await file.arrayBuffer(); parsed = parseMaxCapitalXLSX(buffer, mep, mepHistory) as any; }
       else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep, mepHistory); }
       if (!parsed.length) { setError('No se encontraron operaciones.'); setLoading(false); return; }
       setOps(parsed.map(op => ({ ...op, isDuplicate: isDuplicateOp(op, operacionesExistentes), selected: !isDuplicateOp(op, operacionesExistentes) })));
@@ -1374,7 +1455,7 @@ function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, 
         ):(
           <>
             <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'16px' }}>
-              <div><div className="label-xs" style={{ marginBottom:'8px' }}>Broker</div><div style={{ display:'flex',gap:'8px' }}>{(['IOL','Balanz'] as const).map(b=>(<button key={b} onClick={()=>{setBroker(b);setOps([]);setError('');}} style={{ flex:1,background:broker===b?'var(--violet)':'var(--surface2)',color:broker===b?'#fff':'var(--text2)',border:`1px solid ${broker===b?'var(--violet)':'var(--border)'}`,borderRadius:'8px',padding:'10px',cursor:'pointer',fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'14px' }}>{b}</button>))}</div></div>
+              <div><div className="label-xs" style={{ marginBottom:'8px' }}>Broker</div><div style={{ display:'flex',gap:'8px',flexWrap:'wrap' }}>{(['IOL','Balanz','Max Capital'] as const).map(b=>(<button key={b} onClick={()=>{setBroker(b);setOps([]);setError('');}} style={{ flex:1,minWidth:'80px',background:broker===b?'var(--violet)':'var(--surface2)',color:broker===b?'#fff':'var(--text2)',border:`1px solid ${broker===b?'var(--violet)':'var(--border)'}`,borderRadius:'8px',padding:'10px',cursor:'pointer',fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'13px' }}>{b}</button>))}</div></div>
               <div><div className="label-xs" style={{ marginBottom:'8px' }}>Archivo</div><button onClick={()=>fileRef.current?.click()} style={{ width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',background:'var(--surface2)',border:'1px dashed var(--border)',borderRadius:'8px',padding:'10px',cursor:'pointer',color:'var(--text2)',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'13px' }} onMouseEnter={e=>{e.currentTarget.style.borderColor='var(--violet)';}} onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--border)';}}>  <Upload size={15}/> Seleccionar</button><input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display:'none' }} onChange={e=>{const f=e.target.files?.[0];if(f)handleFile(f);e.target.value='';}} /></div>
             </div>
             {loading&&<div style={{ textAlign:'center',padding:'40px',color:'var(--muted)',fontFamily:'DM Mono, monospace' }}>Procesando archivo...</div>}
