@@ -256,8 +256,12 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
       const pct = cantVendida / base.cantidad;
       const costoVendido = base.costoTotal * pct;
       base.costoTotal -= costoVendido; base.cantidad -= cantVendida;
-      // Amortizaciones son devolución de capital, no P&L realizado — no se registran como ganancia/pérdida
-      if (op.notas === 'amortizacion') continue;
+      // Amortizaciones y vencimientos de renta fija no son P&L realizado — son devolución de capital
+      const esAmortizacion = op.notas === 'amortizacion';
+      const letraVenc = getLetraVencimiento(op.ticker);
+      const esVencimientoLecap = letraVenc != null && op.fecha >= letraVenc;
+      const esBondTicker = isArgentineRentaFija(op.ticker) || ['bono','on'].includes(op.tipo_activo || '');
+      if (esAmortizacion || esVencimientoLecap || (esBondTicker && op.notas === 'amortizacion')) continue;
       const ganancia = getMontoUSDOperacion(op, fallbackMep, mepHistory) - costoVendido;
       if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: 0, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: 0 });
       const real = realizadasMap.get(key)!;
@@ -273,17 +277,6 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
       const qty = op.cantidad || 0;
       const costPerUnit = transferCostPerUnit.get(key) || 0;
       base.costoTotal += costPerUnit * qty; base.cantidad += qty;
-    }
-  }
-
-  // Vencidos sin venta explícita
-  const hoy = new Date();
-  for (const [key, base] of Array.from(bases.entries())) {
-    if (base.cantidad <= 0.000001) continue;
-    const venc = vencimientosMap[key];
-    if (venc && new Date(venc) < hoy) {
-      if (!realizadasMap.has(key)) realizadasMap.set(key, { ticker: key, nombre: base.nombre, tipo_activo: base.tipo_activo, montoVentaUSD: 0, costoRealizadoUSD: base.costoTotal, gananciaUSD: 0, gananciaPct: 0, cantidadVendida: base.cantidad, vencido: true });
-      realizadasMap.get(key)!.vencido = true;
     }
   }
 
