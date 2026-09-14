@@ -942,26 +942,29 @@ function ModalHistorialActivo({ pos, operaciones, realizada, mep, mepHistory, on
   mep: number; mepHistory: MepHistoryEntry[]; onClose: () => void;
 }) {
   const isMobile = useIsMobile();
+  const abierta = pos.cantidad > 0.000001;
   const compras = operaciones.filter(o => o.tipo === 'compra').sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const ventas = operaciones.filter(o => o.tipo === 'venta').sort((a,b) => a.fecha.localeCompare(b.fecha));
   const priceUSD = pos.moneda === 'ARS' ? (pos.precioActual || 0) / mep : (pos.precioActual || 0);
 
-  // Tenencia promedio ponderada por cantidad
-  const hoy = Date.now();
+  // Tenencia promedio ponderada por cantidad — en posiciones cerradas se mide hasta la
+  // fecha de la última venta (no hasta hoy), para reflejar el tiempo que realmente se sostuvo
+  const finRef = abierta ? Date.now() : (ventas.at(-1) ? new Date(ventas.at(-1)!.fecha + 'T00:00:00').getTime() : Date.now());
   let totalWeightedDays = 0, totalQty = 0;
   compras.forEach(op => {
-    const dias = (hoy - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000;
+    const dias = (finRef - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000;
     totalWeightedDays += dias * (op.cantidad || 0);
     totalQty += (op.cantidad || 0);
   });
   const tenenciaDias = totalQty > 0 ? totalWeightedDays / totalQty : 0;
   const tenenciaLabel = tenenciaDias < 30 ? `${Math.round(tenenciaDias)} d` : tenenciaDias < 365 ? `${Math.round(tenenciaDias/30)} m` : `${(tenenciaDias/365).toFixed(1)} a`;
 
-  // TIR anual por posición
+  // TIR anual — sobre el valor de mercado si está abierta, sobre lo efectivamente cobrado si está cerrada
   const firstBuyFecha = compras[0]?.fecha;
-  const anos = firstBuyFecha ? (hoy - new Date(firstBuyFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
-  const tir = (pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05)
-    ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100)
-    : null;
+  const anos = firstBuyFecha ? (finRef - new Date(firstBuyFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
+  const tir = abierta
+    ? ((pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05) ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100) : null)
+    : ((realizada && realizada.costoRealizadoUSD > 0 && anos > 0.05) ? ((Math.pow(realizada.montoVentaUSD / realizada.costoRealizadoUSD, 1 / anos) - 1) * 100) : null);
 
   // Lotes acumulados para mostrar posición corrida
   let cumQty = 0, cumCosto = 0;
@@ -982,7 +985,10 @@ function ModalHistorialActivo({ pos, operaciones, realizada, mep, mepHistory, on
         {/* Header */}
         <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 20px 14px',borderBottom:'1px solid var(--border)' }}>
           <div>
-            <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'16px',color:'var(--text)' }}>{pos.ticker} — Historial de Operaciones</div>
+            <div style={{ display:'flex',alignItems:'center',gap:'8px' }}>
+              <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'16px',color:'var(--text)' }}>{pos.ticker} — Historial de Operaciones</div>
+              <span style={{ fontSize:'9px',fontFamily:'Syne, sans-serif',fontWeight:700,letterSpacing:'0.04em',padding:'2px 6px',borderRadius:'5px',background: abierta ? 'rgba(16,185,129,0.15)' : 'rgba(148,163,184,0.15)',color: abierta ? 'var(--green)' : 'var(--muted)' }}>{abierta ? 'ABIERTA' : 'CERRADA'}</span>
+            </div>
             {pos.nombre !== pos.ticker && <div style={{ fontSize:'11px',color:'var(--muted)',marginTop:'2px' }}>{pos.nombre}</div>}
           </div>
           <button onClick={onClose} style={{ background:'none',border:'none',cursor:'pointer',color:'var(--muted)',padding:'4px',display:'flex',alignItems:'center' }}><X size={18} /></button>
@@ -1053,6 +1059,39 @@ function ModalHistorialActivo({ pos, operaciones, realizada, mep, mepHistory, on
               ))}
             </div>
           </div>
+          {/* Timeline de ventas */}
+          {ventas.length > 0 && (
+            <div style={{ borderTop:'1px solid var(--border)',paddingTop:'12px' }}>
+              <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'12px',color:'var(--muted2)',marginBottom:'12px',letterSpacing:'0.06em' }}>VENTAS</div>
+              <div style={{ display:'flex',flexDirection:'column',gap:'0' }}>
+                {ventas.slice().reverse().map((op, i) => {
+                  const montoUSD = getMontoUSDOperacion(op, mep, mepHistory);
+                  return (
+                    <div key={op.id} style={{ display:'flex',gap:'12px',paddingBottom:'0' }}>
+                      <div style={{ display:'flex',flexDirection:'column',alignItems:'center',flexShrink:0 }}>
+                        <div style={{ width:'10px',height:'10px',borderRadius:'50%',background:'var(--red)',flexShrink:0,marginTop:'14px' }} />
+                        {i < ventas.length - 1 && <div style={{ width:'2px',flex:1,background:'var(--border)',minHeight:'32px' }} />}
+                      </div>
+                      <div style={{ flex:1,paddingBottom:'16px' }}>
+                        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'6px' }}>
+                          <span style={{ background:'rgba(239,68,68,0.15)',color:'var(--red)',borderRadius:'5px',padding:'2px 8px',fontSize:'10px',fontFamily:'Syne, sans-serif',fontWeight:700 }}>VENTA</span>
+                          <span style={{ fontSize:'12px',color:'var(--muted2)',fontFamily:'DM Mono, monospace' }}>{fmtDate(op.fecha)}</span>
+                        </div>
+                        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'4px' }}>
+                          {[['CANT.', fmtNum(op.cantidad || 0, 2)], ['PRECIO', fmtUSD(montoUSD / (op.cantidad || 1))], ['TOTAL', fmtUSD(montoUSD)]].map(([l, v]) => (
+                            <div key={l}>
+                              <div style={{ fontSize:'9px',color:'var(--muted2)',fontFamily:'Syne, sans-serif',fontWeight:700,letterSpacing:'0.06em' }}>{l}</div>
+                              <div style={{ fontSize:'13px',color:'var(--text)',fontFamily:'DM Mono, monospace',fontWeight:600 }}>{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1066,19 +1105,45 @@ function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: 
   const isMobile = useIsMobile();
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'valor'|'pnl'|'pnlPct'>('valor');
+  const [estado, setEstado] = useState<'todas'|'abiertas'|'cerradas'>('todas');
   const [selected, setSelected] = useState<string | null>(null);
 
   const totalValor = posiciones.reduce((s, p) => s + (p.valorActualUSD || 0), 0);
 
-  const filtered = posiciones
+  // Activos vendidos por completo: `posiciones` no los incluye (calcularPosicionesBase
+  // los descarta al llegar a cantidad 0), así que los reconstruimos a partir de las
+  // ganancias realizadas para poder mostrar también su rendimiento.
+  const tickersAbiertos = new Set(posiciones.map(p => p.ticker));
+  const cerradas: PosicionCompleta[] = realizadas
+    .filter(r => !tickersAbiertos.has(r.ticker))
+    .map(r => ({
+      ticker: r.ticker, tickerBuscar: r.ticker, nombre: r.nombre, tipo_activo: r.tipo_activo,
+      broker: '—', moneda: 'USD', cantidad: 0, costoTotalUSD: r.costoRealizadoUSD,
+      costoPromedioUSD: r.cantidadVendida > 0 ? r.costoRealizadoUSD / r.cantidadVendida : 0,
+      precioActual: null, valorActualUSD: null, pnlUSD: null, pnlPct: null, variacionDiaria: null,
+      pnlRentas: 0, loadingPrecio: false, esVencido: r.vencido,
+    }));
+
+  const todasLasPosiciones = [...posiciones, ...cerradas];
+
+  const pnlEfectivoUSD = (p: PosicionCompleta) => p.pnlUSD ?? realizadas.find(r => r.ticker === p.ticker)?.gananciaUSD ?? 0;
+  const pnlEfectivoPct = (p: PosicionCompleta) => p.pnlPct ?? realizadas.find(r => r.ticker === p.ticker)?.gananciaPct ?? 0;
+
+  const filtered = todasLasPosiciones
+    .filter(p => {
+      const abierta = p.cantidad > 0.000001;
+      if (estado === 'abiertas') return abierta;
+      if (estado === 'cerradas') return !abierta;
+      return true;
+    })
     .filter(p => p.ticker.includes(search.toUpperCase()) || (p.nombre || '').toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => {
       if (sortBy === 'valor') return (b.valorActualUSD || 0) - (a.valorActualUSD || 0);
-      if (sortBy === 'pnl') return (b.pnlUSD || 0) - (a.pnlUSD || 0);
-      return (b.pnlPct || 0) - (a.pnlPct || 0);
+      if (sortBy === 'pnl') return pnlEfectivoUSD(b) - pnlEfectivoUSD(a);
+      return pnlEfectivoPct(b) - pnlEfectivoPct(a);
     });
 
-  const selectedPos = selected ? posiciones.find(p => p.ticker === selected) : null;
+  const selectedPos = selected ? todasLasPosiciones.find(p => p.ticker === selected) : null;
 
   return (
     <div style={{ display:'flex',flexDirection:'column',gap:'12px' }}>
@@ -1089,6 +1154,12 @@ function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: 
           value={search} onChange={e => setSearch(e.target.value)}
           style={{ flex:1,minWidth:'160px',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'DM Mono, monospace',fontSize:'13px',outline:'none' }}
         />
+        <select value={estado} onChange={e => setEstado(e.target.value as any)}
+          style={{ background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'12px',cursor:'pointer' }}>
+          <option value="todas">Todas</option>
+          <option value="abiertas">Abiertas</option>
+          <option value="cerradas">Cerradas</option>
+        </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
           style={{ background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'Syne, sans-serif',fontWeight:600,fontSize:'12px',cursor:'pointer' }}>
           <option value="valor">Valor ↓</option>
@@ -1099,28 +1170,34 @@ function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: 
       {/* Cards */}
       <div style={{ display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:'10px' }}>
         {filtered.map(pos => {
+          const abierta = pos.cantidad > 0.000001;
           const opsActivo = operaciones.filter(o => normalizarTicker(o.ticker) === pos.ticker);
           const real = realizadas.find(r => r.ticker === pos.ticker);
           const pctPortfolio = totalValor > 0 && pos.valorActualUSD ? (pos.valorActualUSD / totalValor) * 100 : 0;
           const compras = opsActivo.filter(o => o.tipo === 'compra');
-          const hoy = Date.now();
+          const ventas = opsActivo.filter(o => o.tipo === 'venta');
+          const finRef = abierta ? Date.now() : (ventas.length ? new Date(ventas.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).at(-1)!.fecha + 'T00:00:00').getTime() : Date.now());
           let twDays = 0, tqty = 0;
-          compras.forEach(op => { const d = (hoy - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000; twDays += d * (op.cantidad || 0); tqty += (op.cantidad || 0); });
+          compras.forEach(op => { const d = (finRef - new Date(op.fecha + 'T00:00:00').getTime()) / 86400000; twDays += d * (op.cantidad || 0); tqty += (op.cantidad || 0); });
           const tenDias = tqty > 0 ? twDays / tqty : 0;
           const tenLabel = tenDias < 30 ? `${Math.round(tenDias)} d` : tenDias < 365 ? `${Math.round(tenDias/30)} m` : `${(tenDias/365).toFixed(1)} a`;
           const firstFecha = compras.sort((a,b)=>a.fecha.localeCompare(b.fecha))[0]?.fecha;
-          const anos = firstFecha ? (hoy - new Date(firstFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
-          const tir = (pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05)
-            ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100) : null;
+          const anos = firstFecha ? (finRef - new Date(firstFecha + 'T00:00:00').getTime()) / (365.25 * 86400000) : 0;
+          const tir = abierta
+            ? ((pos.valorActualUSD && pos.costoTotalUSD > 0 && anos > 0.05) ? ((Math.pow(pos.valorActualUSD / pos.costoTotalUSD, 1 / anos) - 1) * 100) : null)
+            : ((real && real.costoRealizadoUSD > 0 && anos > 0.05) ? ((Math.pow(real.montoVentaUSD / real.costoRealizadoUSD, 1 / anos) - 1) * 100) : null);
 
           return (
             <div key={pos.ticker} onClick={() => setSelected(pos.ticker)}
-              style={{ background:'var(--surface2)',borderRadius:'12px',padding:'14px 16px',cursor:'pointer',border:'1px solid var(--border)',transition:'border-color 0.15s' }}
+              style={{ background:'var(--surface2)',borderRadius:'12px',padding:'14px 16px',cursor:'pointer',border:'1px solid var(--border)',transition:'border-color 0.15s',opacity: abierta ? 1 : 0.85 }}
               onMouseOver={e=>(e.currentTarget.style.borderColor='var(--violet)')}
               onMouseOut={e=>(e.currentTarget.style.borderColor='var(--border)')}>
               <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px' }}>
                 <div>
-                  <div style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'15px',color:'var(--text)' }}>{pos.ticker}</div>
+                  <div style={{ display:'flex',alignItems:'center',gap:'8px' }}>
+                    <span style={{ fontFamily:'Syne, sans-serif',fontWeight:700,fontSize:'15px',color:'var(--text)' }}>{pos.ticker}</span>
+                    <span style={{ fontSize:'9px',fontFamily:'Syne, sans-serif',fontWeight:700,letterSpacing:'0.04em',padding:'2px 6px',borderRadius:'5px',background: abierta ? 'rgba(16,185,129,0.15)' : 'rgba(148,163,184,0.15)',color: abierta ? 'var(--green)' : 'var(--muted)' }}>{abierta ? 'ABIERTA' : 'CERRADA'}</span>
+                  </div>
                   {pos.nombre !== pos.ticker && <div style={{ fontSize:'10px',color:'var(--muted)',marginTop:'1px' }}>{pos.nombre}</div>}
                 </div>
                 <TrendingUp size={14} style={{ color:'var(--muted2)' }} />
@@ -1129,12 +1206,12 @@ function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: 
                 {[
                   ['Cantidad', fmtNum(pos.cantidad, 2), 'var(--text)'],
                   ['Precio Prom.', fmtUSD(pos.costoPromedioUSD), 'var(--text)'],
-                  ['Precio', pos.precioActual != null ? (pos.moneda === 'ARS' ? fmtARS(pos.precioActual) : fmtUSD(pos.precioActual)) : '—', 'var(--text)'],
-                  ['Valor', fmtUSD(pos.valorActualUSD), 'var(--amber)'],
-                  ['% Portfolio', pctPortfolio.toFixed(1) + '%', 'var(--text2)'],
+                  ['Precio', abierta && pos.precioActual != null ? (pos.moneda === 'ARS' ? fmtARS(pos.precioActual) : fmtUSD(pos.precioActual)) : '—', 'var(--text)'],
+                  ['Valor', abierta ? fmtUSD(pos.valorActualUSD) : '—', 'var(--amber)'],
+                  ['% Portfolio', abierta ? pctPortfolio.toFixed(1) + '%' : '—', 'var(--text2)'],
                   ['Invertido', fmtUSD(pos.costoTotalUSD), 'var(--text2)'],
-                  ['No Real. ($)', pos.pnlUSD != null ? (pos.pnlUSD >= 0 ? '+' : '') + fmtUSD(pos.pnlUSD) : '—', colorV(pos.pnlUSD)],
-                  ['No Real. (%)', pos.pnlPct != null ? fmtPct(pos.pnlPct) : '—', colorV(pos.pnlPct)],
+                  ['No Real. ($)', abierta && pos.pnlUSD != null ? (pos.pnlUSD >= 0 ? '+' : '') + fmtUSD(pos.pnlUSD) : '—', colorV(pos.pnlUSD)],
+                  ['No Real. (%)', abierta && pos.pnlPct != null ? fmtPct(pos.pnlPct) : '—', colorV(pos.pnlPct)],
                   ['Real. ($)', real ? (real.gananciaUSD >= 0 ? '+' : '') + fmtUSD(real.gananciaUSD) : '—', colorV(real?.gananciaUSD ?? null)],
                   ['Real. (%)', real && real.montoVentaUSD > 0 ? fmtPct(real.gananciaPct) : '—', colorV(real?.gananciaPct ?? null)],
                   ['TIR', tir != null ? (tir >= 0 ? '+' : '') + tir.toFixed(2) + '%' : '—', colorV(tir)],
@@ -1149,6 +1226,9 @@ function TabPorActivo({ posiciones, operaciones, realizadas, mep, mepHistory }: 
             </div>
           );
         })}
+        {filtered.length === 0 && (
+          <div style={{ gridColumn:'1 / -1',textAlign:'center',padding:'32px 0',color:'var(--muted)',fontSize:'13px' }}>Sin activos para mostrar.</div>
+        )}
       </div>
       {selectedPos && (
         <ModalHistorialActivo
