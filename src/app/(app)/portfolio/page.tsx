@@ -64,7 +64,15 @@ const TIPO_COLORS_OP: Record<string, string> = {
 };
 const DIST_COLORS = ['#7c3aed','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#a3e635'];
 
-const NO_NORMALIZAR_D = new Set(['YPFD', 'NDD']);
+// Tickers cuyo símbolo termina en "D" de forma nativa (no es el sufijo de liquidación
+// en pesos de un CEDEAR) — no hay que quitarles la D al normalizar. Algunos representan
+// el mismo activo que otro ticker (ej: YPFD en BYMA es la misma acción que el ADR YPF
+// en NYSE) y se mapean directamente a ese ticker para consolidar la tenencia.
+const TICKER_D_NATIVO: Record<string, string> = { 'YPFD': 'YPF', 'NDD': 'NDD', 'GLD': 'GLD', 'GOLD': 'GOLD' };
+const NO_NORMALIZAR_D = new Set(Object.keys(TICKER_D_NATIVO));
+// CEDEARs cuyo ticker base en pesos (ya sin la "D") no coincide con el ticker en dólares
+// del subyacente (asignado por BYMA, ej: Alphabet cotiza como GOGL/GOGLD, no GOOGL/GOOGLD)
+const CEDEAR_BASE_A_US: Record<string, string> = { 'GOGL': 'GOOGL', 'BRKB': 'BRK-B', 'DISN': 'DIS' };
 const BONOS_SET = new Set(['AL29','AL30','AL35','AL41','GD29','GD30','GD35','GD38','GD41','GD46','AE38','GK17','NDF','NDB','NDA','NDS','NDG','DICP','CUAP','DICA','BPY26','BPJ28','BPD29','TX24','TX26','TX28','LECAP','LECER','BONTE','PR15','PR13']);
 const AR_STOCKS = new Set(['GGAL','YPFD','PAMP','TXAR','ALUA','BMA','LOMA','TECO','CEPU','VALO','CRES','IRCP','METR','COME','HARG','RICH','AGRO','SEMI','SUPV','BBAR','BYMA','NQNF','OEST']);
 
@@ -90,8 +98,11 @@ function isArgentineRentaFija(ticker: string): boolean {
 
 function normalizarTicker(ticker: string): string {
   const upper = ticker.toUpperCase();
-  if (NO_NORMALIZAR_D.has(upper)) return upper;
-  if (upper.endsWith('D') && upper.length > 2) return upper.slice(0, -1);
+  if (TICKER_D_NATIVO[upper]) return TICKER_D_NATIVO[upper];
+  if (upper.endsWith('D') && upper.length > 2) {
+    const base = upper.slice(0, -1);
+    return CEDEAR_BASE_A_US[base] || base;
+  }
   return upper;
 }
 
