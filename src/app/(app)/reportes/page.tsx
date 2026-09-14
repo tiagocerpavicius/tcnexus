@@ -55,7 +55,7 @@ const RANGE_MAP: Record<string, string> = {
   semanal:   '1mo',
   mensual:   '3mo',
   anual:     '1y',
-  historico: '1y',
+  historico: 'max',
   custom:    '1y',
 };
 
@@ -267,7 +267,11 @@ export default function ReportesPage() {
             return;
           }
 
-          const compraDentroDelPeriodo = pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio;
+          // En "histórico" fechaInicio es la fecha de la primerísima operación de TODO el
+          // portfolio, así que casi cualquier otro ticker fue comprado después — comparar
+          // contra esa fecha global excluiría del gráfico a casi todos los activos. Para
+          // histórico siempre traemos el precio histórico completo de cada activo.
+          const compraDentroDelPeriodo = periodoActual !== 'historico' && !!pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio;
 
           if (compraDentroDelPeriodo) {
             historicosMap[pos.ticker] = {
