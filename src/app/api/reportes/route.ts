@@ -83,6 +83,20 @@ export async function POST(request: NextRequest) {
       cantidad: number; costoTotal: number; tipo: string; broker: string; moneda: string;
     }>();
 
+    // Ganancias realizadas por ticker (para activos comprados y vendidos por completo)
+    const realizadas = new Map<string, {
+      costoRealizado: number; montoVenta: number; cantidadVendida: number; fechaUltimaVenta: string;
+    }>();
+
+    // Eventos (compra/venta/dividendo) por ticker, para reconstruir en el cliente cuánto
+    // había invertido y cuánto se había realizado en cada fecha (curva día a día exacta,
+    // no solo el total final).
+    const eventosPorTicker = new Map<string, { fecha: string; tipo: 'compra' | 'venta' | 'dividendo'; cantidad: number; montoUsd: number }[]>();
+    const pushEvento = (key: string, ev: { fecha: string; tipo: 'compra' | 'venta' | 'dividendo'; cantidad: number; montoUsd: number }) => {
+      if (!eventosPorTicker.has(key)) eventosPorTicker.set(key, []);
+      eventosPorTicker.get(key)!.push(ev);
+    };
+
     // Mapa de primera compra por ticker
     const primeraCompraPorTicker: Record<string, string> = {};
 
@@ -116,15 +130,32 @@ export async function POST(request: NextRequest) {
       }
       const pos = posiciones.get(key)!;
 
+      // Solo trackeamos eventos día a día para tipos con precio de mercado consultable
+      // (cedear/accion_ar) — bonos/efectivo no tienen historial de precio en este reporte.
+      const trackeable = pos.tipo === 'cedear' || pos.tipo === 'accion_ar';
+
       if (op.tipo === 'compra') {
         pos.cantidad += op.cantidad || 0;
         pos.costoTotal += op.monto_usd || 0;
         pos.broker = op.broker || pos.broker;
+        if (trackeable) pushEvento(key, { fecha: op.fecha, tipo: 'compra', cantidad: op.cantidad || 0, montoUsd: op.monto_usd || 0 });
       } else if (op.tipo === 'venta' && pos.cantidad > 0) {
         const pct = Math.min((op.cantidad || 0) / pos.cantidad, 1);
-        pos.costoTotal *= (1 - pct);
+        const costoVendido = pos.costoTotal * pct;
+        pos.costoTotal -= costoVendido;
         pos.cantidad -= op.cantidad || 0;
         if (pos.cantidad <= 0) { pos.cantidad = 0; pos.costoTotal = 0; }
+
+        // Amortizaciones de renta fija son devolución de capital, no ganancia realizada
+        if (op.notas !== 'amortizacion') {
+          if (!realizadas.has(key)) realizadas.set(key, { costoRealizado: 0, montoVenta: 0, cantidadVendida: 0, fechaUltimaVenta: op.fecha });
+          const r = realizadas.get(key)!;
+          r.costoRealizado += costoVendido;
+          r.montoVenta += op.monto_usd || 0;
+          r.cantidadVendida += op.cantidad || 0;
+          r.fechaUltimaVenta = op.fecha;
+          if (trackeable) pushEvento(key, { fecha: op.fecha, tipo: 'venta', cantidad: op.cantidad || 0, montoUsd: op.monto_usd || 0 });
+        }
       } else if (op.tipo === 'traspaso' && op.notas === 'out' && pos.cantidad > 0) {
         const qty = Math.min(op.cantidad || 0, pos.cantidad);
         const costPerUnit = pos.cantidad > 0 ? pos.costoTotal / pos.cantidad : 0;
@@ -152,10 +183,17 @@ export async function POST(request: NextRequest) {
       if (o.ticker) {
         const key = normalizarTicker(o.ticker);
         dividendosPorTicker[key] = (dividendosPorTicker[key] || 0) + (o.monto_usd || 0);
+        const tipoPos = posiciones.get(key)?.tipo;
+        if (tipoPos === 'cedear' || tipoPos === 'accion_ar') {
+          pushEvento(key, { fecha: o.fecha, tipo: 'dividendo', cantidad: 0, montoUsd: o.monto_usd || 0 });
+        }
       }
     });
 
-    // 7. Performance por activo
+    // Los dividendos se agregaron después del pase cronológico principal — reordenamos
+    eventosPorTicker.forEach(lista => lista.sort((a, b) => a.fecha.localeCompare(b.fecha)));
+
+    // 7. Performance por activo (posiciones abiertas)
     const performancePorActivo = Array.from(posiciones.entries())
       .filter(([, v]) => v.cantidad > 0.0001)
       .map(([ticker, pos]) => ({
@@ -168,7 +206,32 @@ export async function POST(request: NextRequest) {
         tipo: pos.tipo,
         broker: pos.broker,
         fechaPrimeraCompra: primeraCompraPorTicker[ticker] || null,
+        eventos: eventosPorTicker.get(ticker) || [],
       }));
+
+    // 7b. Activos comprados y vendidos por completo, cerrados dentro del período del reporte
+    const performanceCerrada = Array.from(posiciones.entries())
+      .filter(([ticker, v]) => v.cantidad <= 0.0001 && realizadas.has(ticker))
+      .map(([ticker, pos]) => {
+        const r = realizadas.get(ticker)!;
+        const gananciaUSD = r.montoVenta - r.costoRealizado;
+        return {
+          ticker,
+          tickerBuscar: tickerParaBuscar(ticker, pos.tipo),
+          tipo: pos.tipo,
+          broker: pos.broker,
+          cantidadVendida: r.cantidadVendida,
+          costoRealizado: r.costoRealizado,
+          montoVenta: r.montoVenta,
+          gananciaUSD,
+          gananciaPct: r.costoRealizado > 0 ? (gananciaUSD / r.costoRealizado) * 100 : 0,
+          dividendos: dividendosPorTicker[ticker] || 0,
+          fechaPrimeraCompra: primeraCompraPorTicker[ticker] || null,
+          fechaUltimaVenta: r.fechaUltimaVenta,
+          eventos: eventosPorTicker.get(ticker) || [],
+        };
+      })
+      .filter(p => p.fechaUltimaVenta >= fechaInicio && p.fechaUltimaVenta <= fechaFin);
 
     // 8. Cauciones
     const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
@@ -209,6 +272,7 @@ export async function POST(request: NextRequest) {
       efectivoUSD,
       tickersAbiertos: performancePorActivo.map(p => p.tickerBuscar),
       performancePorActivo,
+      performanceCerrada,
       totalOps: ops.length,
       opsPeriodoCount: opsPeriodo.length,
     });

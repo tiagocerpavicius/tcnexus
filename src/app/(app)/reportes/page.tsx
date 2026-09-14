@@ -60,6 +60,13 @@ const RANGE_MAP: Record<string, string> = {
   custom:    '1y',
 };
 
+interface EventoActivo {
+  fecha: string;
+  tipo: 'compra' | 'venta' | 'dividendo';
+  cantidad: number;
+  montoUsd: number;
+}
+
 interface PosicionActivo {
   ticker: string;
   tickerBuscar: string;
@@ -70,6 +77,33 @@ interface PosicionActivo {
   tipo: string;
   broker: string;
   fechaPrimeraCompra: string | null;
+  eventos: EventoActivo[];
+}
+
+// Forma mínima común para pedir el histórico de precios, sea una posición abierta o
+// ya cerrada — a ambas les hace falta valuar el tramo en que se tuvieron.
+interface ActivoParaHistorico {
+  ticker: string;
+  tickerBuscar: string;
+  tipo: string;
+  fechaPrimeraCompra: string | null;
+  costoPromedio: number;
+}
+
+interface PosicionCerrada {
+  ticker: string;
+  tickerBuscar: string;
+  tipo: string;
+  broker: string;
+  cantidadVendida: number;
+  costoRealizado: number;
+  montoVenta: number;
+  gananciaUSD: number;
+  gananciaPct: number;
+  dividendos: number;
+  fechaPrimeraCompra: string | null;
+  fechaUltimaVenta: string;
+  eventos: EventoActivo[];
 }
 
 interface ReporteData {
@@ -86,6 +120,7 @@ interface ReporteData {
   tnaPromedio: number | null;
   tickersAbiertos: string[];
   performancePorActivo: PosicionActivo[];
+  performanceCerrada: PosicionCerrada[];
   totalOps: number;
   opsPeriodoCount: number;
   efectivoUSD: number;
@@ -173,8 +208,17 @@ export default function ReportesPage() {
       if (tickersBase.length) {
         cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
-        cargarHistoricos(data.performancePorActivo, data.fechaInicio, periodo);
       }
+      const activosParaHistorico: ActivoParaHistorico[] = [
+        ...data.performancePorActivo.map((p: PosicionActivo): ActivoParaHistorico => ({
+          ticker: p.ticker, tickerBuscar: p.tickerBuscar, tipo: p.tipo, fechaPrimeraCompra: p.fechaPrimeraCompra, costoPromedio: p.costoPromedio,
+        })),
+        ...data.performanceCerrada.map((p: PosicionCerrada): ActivoParaHistorico => ({
+          ticker: p.ticker, tickerBuscar: p.tickerBuscar, tipo: p.tipo, fechaPrimeraCompra: p.fechaPrimeraCompra,
+          costoPromedio: p.cantidadVendida > 0 ? p.costoRealizado / p.cantidadVendida : 0,
+        })),
+      ];
+      if (activosParaHistorico.length) cargarHistoricos(activosParaHistorico, data.fechaInicio, periodo);
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
     }
@@ -235,7 +279,7 @@ export default function ReportesPage() {
   }
 
   async function cargarHistoricos(
-    posiciones: PosicionActivo[],
+    posiciones: ActivoParaHistorico[],
     fechaInicio: string,
     periodoActual: string
   ) {
@@ -269,22 +313,14 @@ export default function ReportesPage() {
             return;
           }
 
-          // En "histórico" fechaInicio es la fecha de la primerísima operación de TODO el
-          // portfolio, así que casi cualquier otro ticker fue comprado después — comparar
-          // contra esa fecha global excluiría del gráfico a casi todos los activos. Para
-          // histórico siempre traemos el precio histórico completo de cada activo.
-          const compraDentroDelPeriodo = periodoActual !== 'historico' && !!pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio;
-
-          if (compraDentroDelPeriodo) {
-            historicosMap[pos.ticker] = {
-              precioInicio: pos.costoPromedio,
-              precioActual: null,
-              retornoPeriodo: null,
-              usoCostoPromedio: true,
-              histCompleto: [],
-            };
-            return;
-          }
+          // "Histórico" es el rendimiento histórico DEL PORTFOLIO, no del activo: si compré
+          // Micron hace 6 meses, quiero ver mi rendimiento de esos 6 meses, no los 10 años de
+          // historia de Micron. Por eso el precio "inicial" de cada activo se busca en la fecha
+          // en que YO lo compré (fechaPrimeraCompra), no en el inicio global del reporte —
+          // salvo que ya lo tuviera desde antes de ese inicio, en cuyo caso usamos ese inicio.
+          const fechaReferenciaActivo = pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fechaInicio
+            ? pos.fechaPrimeraCompra
+            : fechaInicio;
 
           let hist: { fecha: string; cierre: number }[] = [];
 
@@ -320,7 +356,7 @@ export default function ReportesPage() {
             return;
           }
 
-          const precioInicioEntry = [...hist].filter(h => h.fecha <= fechaInicio).at(-1) || hist[0];
+          const precioInicioEntry = [...hist].filter(h => h.fecha <= fechaReferenciaActivo).at(-1) || hist[0];
           const precioInicio = precioInicioEntry?.cierre ?? null;
           const precioActualHist = hist.at(-1)?.cierre ?? null;
 
@@ -408,75 +444,120 @@ export default function ReportesPage() {
 
   const capitalActual = capitalActivo + (reporte?.interesesCauciones || 0) + efectivo;
 
-  // Retorno del período ponderado
+  // Retorno del período ponderado — combina lo NO realizado (posiciones que seguís
+  // teniendo: valor al inicio vs valor actual) con lo YA realizado (posiciones que
+  // compraste y vendiste del todo en el período: lo pagado vs lo cobrado en la venta).
+  // Ambas cosas son ganancia/pérdida real del portfolio en el período, así que se suman
+  // en la misma cuenta ponderada.
   const retornoPeriodo = (() => {
-    if (!reporte || Object.keys(historicos).length === 0) return null;
+    if (!reporte) return null;
     let valorInicio = 0;
     let valorActual = 0;
     let posicionesConDatos = 0;
-    reporte.performancePorActivo.forEach(pos => {
-      const hist = historicos[pos.ticker];
-      const precioActual = precios[pos.ticker]?.precio ?? null;
-      if (!hist || precioActual == null) return;
-      const precioBase = hist.usoCostoPromedio ? pos.costoPromedio : hist.precioInicio;
-      if (precioBase && precioBase > 0) {
-        valorInicio += precioBase * pos.cantidad;
-        valorActual += precioActual * pos.cantidad;
+
+    if (Object.keys(historicos).length > 0) {
+      reporte.performancePorActivo.forEach(pos => {
+        const hist = historicos[pos.ticker];
+        const precioActual = precios[pos.ticker]?.precio ?? null;
+        if (!hist || precioActual == null) return;
+        const precioBase = hist.usoCostoPromedio ? pos.costoPromedio : hist.precioInicio;
+        if (precioBase && precioBase > 0) {
+          valorInicio += precioBase * pos.cantidad;
+          valorActual += precioActual * pos.cantidad;
+          posicionesConDatos++;
+        }
+      });
+    }
+
+    reporte.performanceCerrada.forEach(pos => {
+      if (pos.costoRealizado > 0) {
+        valorInicio += pos.costoRealizado;
+        valorActual += pos.montoVenta;
         posicionesConDatos++;
       }
     });
+
     if (posicionesConDatos === 0 || valorInicio === 0) return null;
     return ((valorActual - valorInicio) / valorInicio) * 100;
   })();
 
-  // Gráfico de evolución del portfolio usando históricos de precios
+  // Gráfico de evolución del portfolio: ganancia/pérdida acumulada día a día, como % del
+  // capital que tuviste desplegado en el mercado hasta esa fecha. Combina, para CADA fecha:
+  // - lo no realizado de lo que seguís teniendo (valor de mercado - costo, con la cantidad
+  //   REAL que tenías ese día, reconstruida a partir de tus compras/ventas — no la cantidad
+  //   actual proyectada hacia atrás), y
+  // - lo ya realizado de lo que compraste y vendiste (lo cobrado - lo pagado, más dividendos),
+  //   apenas ocurre la venta — no solo al final del período.
   const graficoEvolucion = (() => {
     if (!reporte || Object.keys(historicos).length === 0) return [];
 
-    // Juntar todas las fechas de todos los históricos
-    const todasFechas = new Set<string>();
-    reporte.performancePorActivo.forEach(pos => {
-      const hist = historicos[pos.ticker];
-      if (hist?.histCompleto?.length) {
-        hist.histCompleto.forEach(h => todasFechas.add(h.fecha));
-      }
-    });
+    const todosLosActivos = [...reporte.performancePorActivo, ...reporte.performanceCerrada];
 
+    // Fechas ancla: todos los días con precio de mercado disponible + cada fecha de
+    // compra/venta/dividendo (para que la curva refleje el escalón exacto de cada operación)
+    const todasFechas = new Set<string>();
+    todosLosActivos.forEach(pos => {
+      const hist = historicos[pos.ticker];
+      if (hist?.histCompleto?.length) hist.histCompleto.forEach(h => todasFechas.add(h.fecha));
+      pos.eventos?.forEach(e => todasFechas.add(e.fecha));
+    });
     const fechasOrdenadas = Array.from(todasFechas).sort();
     if (fechasOrdenadas.length < 2) return [];
 
-    // Para cada fecha calcular el valor total del portfolio
+    // Cantidad tenida, costo de lo que sigue abierto, y costo/monto de lo ya vendido,
+    // reconstruidos a partir de los eventos reales del activo hasta una fecha dada.
+    const estadoEnFecha = (eventos: EventoActivo[], fecha: string) => {
+      let cantidad = 0, costoAbierto = 0, costoVendidoAcum = 0, montoVentaAcum = 0, dividendosAcum = 0;
+      for (const ev of eventos) {
+        if (ev.fecha > fecha) break;
+        if (ev.tipo === 'compra') {
+          cantidad += ev.cantidad;
+          costoAbierto += ev.montoUsd;
+        } else if (ev.tipo === 'venta') {
+          const pct = cantidad > 0 ? Math.min(ev.cantidad / cantidad, 1) : 0;
+          const costoVendido = costoAbierto * pct;
+          costoAbierto -= costoVendido;
+          cantidad = Math.max(0, cantidad - ev.cantidad);
+          costoVendidoAcum += costoVendido;
+          montoVentaAcum += ev.montoUsd;
+        } else if (ev.tipo === 'dividendo') {
+          dividendosAcum += ev.montoUsd;
+        }
+      }
+      return { cantidad, costoAbierto, costoVendidoAcum, montoVentaAcum, dividendosAcum };
+    };
+
     const puntos = fechasOrdenadas.map(fecha => {
-      let valorTotal = 0;
-      let posicionesConPrecio = 0;
+      let pnlTotal = 0;
+      let capitalDesplegado = 0;
 
-      reporte.performancePorActivo.forEach(pos => {
-        const hist = historicos[pos.ticker];
-        if (!hist?.histCompleto?.length) return;
+      todosLosActivos.forEach(pos => {
+        if (!pos.eventos?.length) return;
+        const estado = estadoEnFecha(pos.eventos, fecha);
+        if (estado.costoAbierto <= 0 && estado.costoVendidoAcum <= 0) return;
 
-        // Si el activo se compró después de esta fecha, no incluirlo
-        if (pos.fechaPrimeraCompra && pos.fechaPrimeraCompra > fecha) return;
+        // Ya realizado (ventas + dividendos) — plata, no depende de ningún precio.
+        capitalDesplegado += estado.costoVendidoAcum;
+        pnlTotal += (estado.montoVentaAcum - estado.costoVendidoAcum) + estado.dividendosAcum;
 
-        // Buscar precio más cercano a esta fecha
-        const entrada = [...hist.histCompleto].filter(h => h.fecha <= fecha).at(-1);
-        if (entrada) {
-          valorTotal += entrada.cierre * pos.cantidad;
-          posicionesConPrecio++;
+        // Todavía abierto — solo si hay un precio de mercado confiable para esta fecha;
+        // si no lo hay, mejor omitir ese tramo que inventar un valor.
+        if (estado.cantidad > 0) {
+          const hist = historicos[pos.ticker];
+          const entrada = hist?.histCompleto?.length ? [...hist.histCompleto].filter(h => h.fecha <= fecha).at(-1) : null;
+          if (entrada) {
+            capitalDesplegado += estado.costoAbierto;
+            pnlTotal += entrada.cierre * estado.cantidad - estado.costoAbierto;
+          }
         }
       });
 
-      return posicionesConPrecio > 0 ? { fecha, valor: +valorTotal.toFixed(2) } : null;
-    }).filter(Boolean) as { fecha: string; valor: number }[];
+      return capitalDesplegado > 0
+        ? { fecha, valor: +(capitalDesplegado + pnlTotal).toFixed(2), rendimiento: +((pnlTotal / capitalDesplegado) * 100).toFixed(2) }
+        : null;
+    }).filter(Boolean) as { fecha: string; valor: number; rendimiento: number }[];
 
-    if (puntos.length < 2) return [];
-
-    // Calcular rendimiento acumulado % desde el inicio
-    const valorBase = puntos[0].valor;
-    return puntos.map(p => ({
-      fecha: p.fecha,
-      valor: p.valor,
-      rendimiento: valorBase > 0 ? +((p.valor - valorBase) / valorBase * 100).toFixed(2) : 0,
-    }));
+    return puntos.length >= 2 ? puntos : [];
   })();
 
   // Volatilidad y Max Drawdown medidos sobre el valor de mercado real de las posiciones
@@ -539,6 +620,18 @@ export default function ReportesPage() {
         return { ...pos, precioUSD, valorActual, plPrecio, plTotal, plPctTotal, retPeriodo };
       }).sort((a, b) => (b.retPeriodo ?? b.plPctTotal ?? 0) - (a.retPeriodo ?? a.plPctTotal ?? 0))
     : [];
+
+  // Activos vendidos por completo dentro del período — no tienen precio actual, su
+  // rendimiento es el resultado realizado de esa compraventa.
+  const cerradasData = reporte
+    ? [...reporte.performanceCerrada].sort((a, b) => b.gananciaPct - a.gananciaPct)
+    : [];
+
+  // Ranking combinado (abiertas + cerradas) para el cuadro "Performance por activo"
+  const barsData = [
+    ...perfData.map(p => ({ ticker: p.ticker, val: p.retPeriodo ?? p.plPctTotal, cerrada: false })),
+    ...cerradasData.map(p => ({ ticker: p.ticker, val: p.gananciaPct as number | null, cerrada: true })),
+  ].sort((a, b) => (b.val ?? -Infinity) - (a.val ?? -Infinity));
 
   const histLoaded = Object.keys(historicos).length > 0;
 
@@ -696,11 +789,14 @@ export default function ReportesPage() {
                 </div>
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {perfData.length > 0 ? perfData.slice(0, 12).map(pos => {
-                  const val = pos.retPeriodo ?? pos.plPctTotal;
+                {barsData.length > 0 ? barsData.slice(0, 12).map(pos => {
+                  const val = pos.val;
                   return (
-                    <div key={pos.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '56px', flexShrink: 0 }}>{pos.ticker}</div>
+                    <div key={pos.ticker} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', opacity: pos.cerrada ? 0.75 : 1 }}>
+                      <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '12px', color: 'var(--text)', width: '56px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {pos.ticker}
+                        {pos.cerrada && <span title="Posición cerrada" style={{ fontSize: '8px', color: 'var(--muted)' }}>●</span>}
+                      </div>
                       <div style={{ flex: 1, height: '8px', background: 'var(--surface2)', borderRadius: '4px', overflow: 'hidden' }}>
                         <div style={{ height: '100%', borderRadius: '4px', background: val != null && val >= 0 ? 'var(--green)' : 'var(--red)', width: `${Math.min(Math.abs(val || 0), 100)}%` }} />
                       </div>
@@ -839,6 +935,69 @@ export default function ReportesPage() {
               </table>
             </div>
           </div>
+
+          {cerradasData.length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600 }}>📤 Posiciones cerradas</div>
+                <div style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>Comprados y vendidos por completo en el período</div>
+              </div>
+              <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                      {['Ticker', 'Comprado', 'Vendido', 'Cantidad', 'Costo', 'Recibido', 'Dividendos', 'Ganancia', 'Ganancia %'].map(h => (
+                        <th key={h} style={{ padding: '10px 16px', color: 'var(--muted2)', fontWeight: 400, textAlign: h === 'Ticker' ? 'left' : 'right', whiteSpace: 'nowrap', fontFamily: 'DM Sans, sans-serif', fontSize: '12px' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cerradasData.map((pos, i) => (
+                      <tr key={pos.ticker} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                        <td style={{ padding: '10px 16px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
+                          <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: 'var(--text)' }}>{pos.ticker}</div>
+                          <div style={{ fontSize: '10px', color: 'var(--muted)', fontFamily: 'DM Sans, sans-serif' }}>{pos.broker}</div>
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text2)', whiteSpace: 'nowrap' }}>
+                          {pos.fechaPrimeraCompra ? new Date(pos.fechaPrimeraCompra).toLocaleDateString('es-AR') : '—'}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text2)', whiteSpace: 'nowrap' }}>
+                          {new Date(pos.fechaUltimaVenta).toLocaleDateString('es-AR')}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>{pos.cantidadVendida.toFixed(2)}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text2)' }}>{fmtUSD(pos.costoRealizado)}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--text)' }}>{fmtUSD(pos.montoVenta)}</td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--green)' }}>
+                          {pos.dividendos > 0 ? fmtUSD(pos.dividendos) : '—'}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.gananciaUSD) }}>
+                          {(pos.gananciaUSD >= 0 ? '+' : '') + fmtUSD(pos.gananciaUSD)}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: colorV(pos.gananciaPct), fontWeight: 600 }}>
+                          {fmtPct(pos.gananciaPct)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
+                      <td colSpan={5} style={{ padding: '10px 16px', fontFamily: 'Syne, sans-serif', fontWeight: 700, color: 'var(--text)', fontSize: '13px' }}>Total</td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--text)' }}>
+                        {fmtUSD(cerradasData.reduce((s, p) => s + p.montoVenta, 0))}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: 'var(--green)' }}>
+                        {fmtUSD(cerradasData.reduce((s, p) => s + p.dividendos, 0))}
+                      </td>
+                      <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'DM Mono, monospace', fontWeight: 700, color: colorV(cerradasData.reduce((s, p) => s + p.gananciaUSD, 0)) }}>
+                        {fmtUSD(cerradasData.reduce((s, p) => s + p.gananciaUSD, 0))}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="card" style={{ marginBottom: '16px' }}>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>✨ Análisis IA del período</div>
