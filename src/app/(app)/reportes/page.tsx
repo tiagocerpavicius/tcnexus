@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { Download, RefreshCw, Sparkles, Calendar, AlertTriangle, CheckCircle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { tickerBaseCedear } from '@/lib/tickers';
 
 const TOOLTIP_STYLE = {
   background: 'var(--surface)',
@@ -172,7 +173,7 @@ export default function ReportesPage() {
       if (tickersBase.length) {
         cargarSectores(tickersBase);
         cargarPrecios(data.performancePorActivo, data.mep);
-        cargarHistoricos(data.performancePorActivo, data.fechaInicio, data.mep, periodo);
+        cargarHistoricos(data.performancePorActivo, data.fechaInicio, periodo);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar el reporte');
@@ -236,7 +237,6 @@ export default function ReportesPage() {
   async function cargarHistoricos(
     posiciones: PosicionActivo[],
     fechaInicio: string,
-    mepActual: number,
     periodoActual: string
   ) {
     const historicosMap: Record<string, HistoricoInfo> = {};
@@ -251,9 +251,14 @@ export default function ReportesPage() {
       }
     } catch {}
 
-    const getMepFecha = (fecha: string): number => {
+    // Devuelve null (en vez de mepActual) cuando la fecha es anterior al dato más viejo
+    // que tenemos — el histórico de MEP arranca recién en 2018. Usar el tipo de cambio
+    // de HOY para convertir un precio en pesos de, por ejemplo, 2016 lo achica ~40 veces
+    // (el MEP pasó de ~$37 a ~$1500), lo que antes inflaba artificialmente el rendimiento
+    // "histórico" de cada CEDEAR. Mejor no tener el dato que inventarlo mal escalado.
+    const getMepFecha = (fecha: string): number | null => {
       const entry = [...mepHistorico].filter(m => m.fecha <= fecha).at(-1);
-      return entry?.venta || mepActual;
+      return entry?.venta ?? null;
     };
 
     await Promise.all(
@@ -283,42 +288,23 @@ export default function ReportesPage() {
 
           let hist: { fecha: string; cierre: number }[] = [];
 
-          if (pos.tipo === 'cedear') {
+          // CEDEARs y acciones argentinas cotizan en pesos en Yahoo (.BA) — hay que
+          // convertir cada cierre con el MEP de ESA fecha. Si no tenemos un MEP real para
+          // esa fecha, descartamos el punto en vez de inventar un valor con el MEP actual
+          // (eso fue lo que causaba los rendimientos absurdos). El ticker de búsqueda es
+          // el ticker BASE de BYMA (sin la "D" de liquidación), que es lo que Yahoo conoce.
+          if (pos.tipo === 'cedear' || pos.tipo === 'accion_ar') {
+            const tickerYahoo = pos.tipo === 'cedear' ? tickerBaseCedear(pos.ticker) : pos.tickerBuscar;
             try {
-              const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
+              const res = await fetch(`/api/historico?ticker=${tickerYahoo}&suffix=.BA&range=${range}&interval=1d`);
               const data = await res.json();
               if (data.historico?.length > 1) {
-                hist = data.historico.map((h: any) => ({
-                  fecha: h.fecha,
-                  cierre: h.cierre / getMepFecha(h.fecha),
-                }));
-              }
-            } catch {}
-
-            if (!hist.length) {
-              try {
-                const res = await fetch(`/api/historico?ticker=${pos.tickerBuscar}&suffix=.BA&range=${range}&interval=1d`);
-                const data = await res.json();
-                if (data.historico?.length > 1) hist = data.historico;
-              } catch {}
-            }
-
-            if (!hist.length) {
-              try {
-                const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=&range=${range}&interval=1d`);
-                const data = await res.json();
-                if (data.historico?.length > 1) hist = data.historico;
-              } catch {}
-            }
-          } else if (pos.tipo === 'accion_ar') {
-            try {
-              const res = await fetch(`/api/historico?ticker=${pos.ticker}&suffix=.BA&range=${range}&interval=1d`);
-              const data = await res.json();
-              if (data.historico?.length > 1) {
-                hist = data.historico.map((h: any) => ({
-                  fecha: h.fecha,
-                  cierre: h.cierre / getMepFecha(h.fecha),
-                }));
+                hist = data.historico
+                  .map((h: any) => {
+                    const mepDia = getMepFecha(h.fecha);
+                    return mepDia ? { fecha: h.fecha, cierre: h.cierre / mepDia } : null;
+                  })
+                  .filter((h: any): h is { fecha: string; cierre: number } => h !== null);
               }
             } catch {}
           }

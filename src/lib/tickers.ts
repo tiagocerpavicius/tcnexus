@@ -44,9 +44,20 @@ export function normalizarTicker(ticker: string): string {
 
 // Dado un ticker ya normalizado (en dólares), reconstruye el ticker con el
 // que hay que buscar la cotización de la CEDEAR en pesos (ej: GOOGL → GOGLD).
+// Sirve para el precio en vivo (IOL vía /api/buscar), donde la "D" identifica
+// la línea de liquidación en dólares/cable de la CEDEAR.
 export function tickerParaBuscarCedear(tickerNormalizado: string): string {
   const base = US_A_CEDEAR_BASE[tickerNormalizado] || tickerNormalizado;
   return base + 'D';
+}
+
+// Dado un ticker ya normalizado (en dólares), reconstruye el ticker BASE de la
+// CEDEAR en BYMA sin la "D" (ej: GOOGL → GOGL). A diferencia de
+// tickerParaBuscarCedear, esta es la forma correcta de consultar el histórico
+// de precios en Yahoo Finance con sufijo ".BA" — Yahoo no distingue la línea
+// de liquidación en dólares, solo conoce el ticker base de la CEDEAR.
+export function tickerBaseCedear(tickerNormalizado: string): string {
+  return US_A_CEDEAR_BASE[tickerNormalizado] || tickerNormalizado;
 }
 
 // Dado un ticker ya normalizado, reconstruye el ticker local/BYMA original
