@@ -1,33 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { normalizarTicker, tickerParaBuscarCedear, tickerLocalArs } from '@/lib/tickers';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
-
-function calcularRetornos(h: { fecha: string; cierre: number }[]) {
-  return h.slice(1).map((d, i) => (d.cierre - h[i].cierre) / h[i].cierre);
-}
-
-function calcularVolatilidad(h: { fecha: string; cierre: number }[]): number | null {
-  if (h.length < 10) return null;
-  const r = calcularRetornos(h);
-  const mean = r.reduce((a, b) => a + b, 0) / r.length;
-  return +(Math.sqrt(r.reduce((a, v) => a + (v - mean) ** 2, 0) / r.length) * Math.sqrt(252) * 100).toFixed(2);
-}
-
-function calcularMaxDrawdown(capitalPorFecha: { fecha: string; valor: number }[]): number {
-  if (capitalPorFecha.length < 2) return 0;
-  let maxDD = 0;
-  let peak = capitalPorFecha[0].valor;
-  for (const { valor } of capitalPorFecha) {
-    if (valor > peak) peak = valor;
-    const dd = (valor - peak) / peak * 100;
-    if (dd < maxDD) maxDD = dd;
-  }
-  return +maxDD.toFixed(2);
-}
 
 function getFechaInicio(periodo: string, fechaCustomInicio?: string): string {
   if (periodo === 'custom' && fechaCustomInicio) return fechaCustomInicio;
@@ -43,8 +21,9 @@ function getFechaInicio(periodo: string, fechaCustomInicio?: string): string {
 function tickerParaBuscar(ticker: string, tipoActivo: string): string {
   const upper = ticker.toUpperCase();
   if (upper.endsWith('D')) return upper;
-  if (tipoActivo === 'bono' || tipoActivo === 'accion_ar' || tipoActivo === 'efectivo') return upper;
-  if (tipoActivo === 'cedear') return upper + 'D';
+  if (tipoActivo === 'accion_ar') return tickerLocalArs(upper);
+  if (tipoActivo === 'bono' || tipoActivo === 'efectivo') return upper;
+  if (tipoActivo === 'cedear') return tickerParaBuscarCedear(upper);
   return upper;
 }
 
@@ -120,7 +99,7 @@ export async function POST(request: NextRequest) {
     for (const op of sorted) {
       const t = op.ticker?.toUpperCase();
       if (!t || op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'dividendo') continue;
-      const key = t.endsWith('D') && t.length > 2 ? t.slice(0, -1) : t;
+      const key = normalizarTicker(t);
 
       // Registrar primera compra
       if (op.tipo === 'compra' && !primeraCompraPorTicker[key]) {
@@ -171,9 +150,7 @@ export async function POST(request: NextRequest) {
     const dividendosPorTicker: Record<string, number> = {};
     ops.filter(o => o.tipo === 'dividendo').forEach(o => {
       if (o.ticker) {
-        const key = o.ticker.toUpperCase().endsWith('D')
-          ? o.ticker.toUpperCase().slice(0, -1)
-          : o.ticker.toUpperCase();
+        const key = normalizarTicker(o.ticker);
         dividendosPorTicker[key] = (dividendosPorTicker[key] || 0) + (o.monto_usd || 0);
       }
     });
@@ -212,23 +189,10 @@ export async function POST(request: NextRequest) {
     }
     efectivoUSD = Math.max(0, efectivoUSD);
 
-    // 10. Historial de capital
-    let acumDepositos = 0;
-    const historialCapital: { fecha: string; valor: number }[] = [];
-    const fechasUnicas = Array.from(new Set(ops.map(o => o.fecha))).sort();
-    for (const fecha of fechasUnicas) {
-      if (fecha < fechaInicio || fecha > fechaFin) continue;
-      const opsDia = ops.filter(o => o.fecha === fecha);
-      acumDepositos += opsDia.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
-      acumDepositos -= opsDia.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
-      if (acumDepositos > 0) historialCapital.push({ fecha, valor: acumDepositos });
-    }
-
-    // 11. Métricas de riesgo
-    const volatilidad = calcularVolatilidad(
-      historialCapital.map(h => ({ fecha: h.fecha, cierre: h.valor }))
-    );
-    const maxDrawdown = calcularMaxDrawdown(historialCapital);
+    // Nota: la volatilidad, el Max Drawdown y el gráfico de evolución se calculan en el
+    // cliente (reportes/page.tsx) a partir del valor de mercado histórico de las posiciones
+    // (precio × cantidad), no acá — acá no tenemos precios históricos por activo, y calcular
+    // esas métricas sobre depósitos/extracciones no mide el rendimiento real del portfolio.
 
     return NextResponse.json({
       periodo,
@@ -245,9 +209,6 @@ export async function POST(request: NextRequest) {
       efectivoUSD,
       tickersAbiertos: performancePorActivo.map(p => p.tickerBuscar),
       performancePorActivo,
-      historialCapital,
-      volatilidad,
-      maxDrawdown,
       totalOps: ops.length,
       opsPeriodoCount: opsPeriodo.length,
     });

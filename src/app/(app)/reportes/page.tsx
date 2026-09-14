@@ -85,9 +85,6 @@ interface ReporteData {
   tnaPromedio: number | null;
   tickersAbiertos: string[];
   performancePorActivo: PosicionActivo[];
-  historialCapital: { fecha: string; valor: number }[];
-  volatilidad: number | null;
-  maxDrawdown: number;
   totalOps: number;
   opsPeriodoCount: number;
   efectivoUSD: number;
@@ -366,18 +363,9 @@ export default function ReportesPage() {
     setIALoading(true);
     setIAError(null);
     try {
-      const efectivo = reporte.efectivoUSD || 0;
-      const capitalActivo = reporte.performancePorActivo.reduce((sum, pos) => {
-        const precioUSD = precios[pos.ticker]?.precio ?? null;
-        return sum + (precioUSD != null ? precioUSD * pos.cantidad : pos.costoTotal);
-      }, 0);
-      const capitalActualIA = capitalActivo + reporte.interesesCauciones + efectivo;
-      const retornoPeriodoIA = reporte.capitalInicial > 0
-        ? (capitalActualIA - reporte.capitalInicial) / reporte.capitalInicial * 100
-        : null;
-      const sharpeIA = reporte.volatilidad && reporte.volatilidad > 0 && retornoPeriodoIA != null
-        ? +((retornoPeriodoIA - 4.5) / reporte.volatilidad).toFixed(2)
-        : null;
+      // Reusamos los mismos parámetros que el resto del reporte (capitalActual, retornoPeriodo,
+      // volatilidad, maxDrawdown, sharpe) en vez de recalcularlos acá — todos miden únicamente
+      // el rendimiento de las posiciones, sin depósitos ni extracciones de por medio.
       const expSectorial: Record<string, number> = {};
       reporte.performancePorActivo.forEach(pos => {
         const s = sectores[pos.ticker]?.sector || 'Otros';
@@ -393,9 +381,9 @@ export default function ReportesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           periodo: reporte.periodo, fechaInicio: reporte.fechaInicio, fechaFin: reporte.fechaFin,
-          capitalInicial: reporte.capitalInicial, capitalActual: capitalActualIA,
-          retornoPeriodo: retornoPeriodoIA, retornoTotal: retornoPeriodoIA,
-          volatilidad: reporte.volatilidad, maxDrawdown: reporte.maxDrawdown, sharpe: sharpeIA,
+          capitalInicial: reporte.capitalInicial, capitalActual,
+          retornoPeriodo, retornoTotal: retornoPeriodo,
+          volatilidad, maxDrawdown, sharpe,
           performancePorActivo: perfData.map(p => ({
   ticker: p.ticker,
   costoTotal: p.costoTotal,
@@ -455,10 +443,6 @@ export default function ReportesPage() {
     return ((valorActual - valorInicio) / valorInicio) * 100;
   })();
 
-  const sharpe = reporte?.volatilidad && reporte.volatilidad > 0 && retornoPeriodo != null
-    ? +((retornoPeriodo - 4.5) / reporte.volatilidad).toFixed(2)
-    : null;
-
   // Gráfico de evolución del portfolio usando históricos de precios
   const graficoEvolucion = (() => {
     if (!reporte || Object.keys(historicos).length === 0) return [];
@@ -508,6 +492,32 @@ export default function ReportesPage() {
       rendimiento: valorBase > 0 ? +((p.valor - valorBase) / valorBase * 100).toFixed(2) : 0,
     }));
   })();
+
+  // Volatilidad y Max Drawdown medidos sobre el valor de mercado real de las posiciones
+  // (misma serie que el gráfico de evolución), no sobre depósitos/extracciones — así todas
+  // las métricas del reporte miden lo mismo: rendimiento puro del portfolio.
+  const volatilidad = (() => {
+    if (graficoEvolucion.length < 10) return null;
+    const retornos = graficoEvolucion.slice(1).map((p, i) => (p.valor - graficoEvolucion[i].valor) / graficoEvolucion[i].valor);
+    const mean = retornos.reduce((a, b) => a + b, 0) / retornos.length;
+    return +(Math.sqrt(retornos.reduce((a, v) => a + (v - mean) ** 2, 0) / retornos.length) * Math.sqrt(252) * 100).toFixed(2);
+  })();
+
+  const maxDrawdown = (() => {
+    if (graficoEvolucion.length < 2) return 0;
+    let maxDD = 0;
+    let peak = graficoEvolucion[0].valor;
+    for (const { valor } of graficoEvolucion) {
+      if (valor > peak) peak = valor;
+      const dd = (valor - peak) / peak * 100;
+      if (dd < maxDD) maxDD = dd;
+    }
+    return +maxDD.toFixed(2);
+  })();
+
+  const sharpe = volatilidad != null && volatilidad > 0 && retornoPeriodo != null
+    ? +((retornoPeriodo - 4.5) / volatilidad).toFixed(2)
+    : null;
 
   const expSectorial: Record<string, number> = {};
   if (reporte) {
@@ -724,8 +734,8 @@ export default function ReportesPage() {
             <div className="card">
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text2)', fontWeight: 600, marginBottom: '14px' }}>🛡️ Métricas de riesgo</div>
               {[
-                { label: 'Volatilidad anualiz.', value: reporte.volatilidad != null ? `${reporte.volatilidad.toFixed(1)}%` : '—', color: reporte.volatilidad != null && reporte.volatilidad > 20 ? 'var(--red)' : 'var(--amber)' },
-                { label: 'Max Drawdown', value: `${reporte.maxDrawdown.toFixed(2)}%`, color: reporte.maxDrawdown < -10 ? 'var(--red)' : 'var(--amber)' },
+                { label: 'Volatilidad anualiz.', value: volatilidad != null ? `${volatilidad.toFixed(1)}%` : '—', color: volatilidad != null && volatilidad > 20 ? 'var(--red)' : 'var(--amber)' },
+                { label: 'Max Drawdown', value: `${maxDrawdown.toFixed(2)}%`, color: maxDrawdown < -10 ? 'var(--red)' : 'var(--amber)' },
                 { label: 'Sharpe ratio', value: sharpe != null ? sharpe.toFixed(2) : '—', color: sharpe != null && sharpe > 1 ? 'var(--green)' : 'var(--red)' },
                 { label: 'Operaciones', value: reporte.opsPeriodoCount.toString(), color: 'var(--text)' },
               ].map(m => (
