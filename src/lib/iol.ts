@@ -45,11 +45,11 @@ export interface IOLCotizacion {
 // Misma forma "plana" que devolvía la API vieja (v2), para no reescribir toda la
 // lógica que ya consume estos campos en los distintos endpoints propios.
 //
-// Usamos siempre el segmento T1 (liquidación normal) — es donde se opera casi todo el
-// volumen real en Argentina, a diferencia de T0 (contado inmediato), que para varios
-// activos queda con cotizaciones viejas por falta de operatoria.
+// T0 (contado inmediato) es el segmento que de verdad trae datos para la gran mayoría
+// de los activos — probamos T1 pensando que sería más representativo, pero rompió la
+// cotización de activos que con T0 andaban perfecto (ej. AMZN), así que volvemos a T0.
 export async function getIOLCotizacion(token: string, ticker: string, market = 'BCBA'): Promise<IOLCotizacion | null> {
-  const data = await iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T1`, token);
+  const data = await iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T0`, token);
   if (!data) return null;
   return {
     ultimoPrecio: data.prices?.current ?? null,
