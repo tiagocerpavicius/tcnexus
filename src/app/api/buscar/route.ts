@@ -227,24 +227,26 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // ── 4. CEDEAR D — precio de IOL, fundamentals lazy ────────
+  // ── 4. CEDEAR D — la línea "D" (dólares) de IOL no trae bien el cambio diario,
+  // así que pedimos la línea base en pesos (confiable) y dejamos que el cliente la
+  // convierta a USD con el MEP, igual que con cualquier otra CEDEAR en pesos.
   if (esD) {
     const base = ticker.slice(0, -1);
     const usTicker = getUSTicker(base);
-    const iolD = token ? await getIOLCotizacion(token, ticker) : null;
-    const precioCedear = iolD?.ultimoPrecio ?? null;
+    const iolBase = token ? await getIOLCotizacion(token, base) : null;
+    const precioCedear = iolBase?.ultimoPrecio ?? null;
 
     if (precioCedear != null) {
       return NextResponse.json({
-        ticker, tipo: 'cedear', fuente: 'IOL D',
-        monedaLabel: 'USD', nombre: usTicker,
+        ticker, tipo: 'cedear', fuente: 'IOL ARS',
+        monedaLabel: 'ARS', nombre: usTicker,
         usTicker, sufixFundamentals: '',
         precio: {
-          valor: precioCedear, moneda: 'USD',
-          variacion: iolD?.variacion ?? null, apertura: iolD?.apertura ?? null,
-          maximo: iolD?.maximo ?? null, minimo: iolD?.minimo ?? null,
-          cierreAnterior: iolD?.cierreAnterior ?? null,
-          fechaHora: iolD?.fechaHora ?? null, fuente: 'IOL D',
+          valor: precioCedear, moneda: 'ARS',
+          variacion: iolBase?.variacion ?? null, apertura: iolBase?.apertura ?? null,
+          maximo: iolBase?.maximo ?? null, minimo: iolBase?.minimo ?? null,
+          cierreAnterior: iolBase?.cierreAnterior ?? null,
+          fechaHora: iolBase?.fechaHora ?? null, fuente: 'IOL ARS',
         },
         marketCap: null, per: null, eps: null, beta: null,
         maximo52: null, minimo52: null,
