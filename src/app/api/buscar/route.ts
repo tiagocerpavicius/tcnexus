@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buscarBono, getAnalytics, calcularTIR } from '@/lib/bonos';
 import { balanzGet, parsearFlujoBalanz, parsearIndicadoresBalanz, getMep } from '@/lib/balanz';
-
-const IOL_TOKEN_URL = 'https://api.invertironline.com/token';
-const IOL_API = 'https://api.invertironline.com/api/v2';
+import { getIOLToken, getIOLCotizacion, getIOLAsset, esCedear, esBono } from '@/lib/iol';
 
 const ARS_TERMINAN_EN_D = new Set(['YPFD']);
 
@@ -13,31 +11,6 @@ const CEDEAR_A_US: Record<string, string> = {
 };
 function getUSTicker(base: string): string {
   return CEDEAR_A_US[base] || base;
-}
-
-async function getToken(): Promise<string | null> {
-  try {
-    const res = await fetch(IOL_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        username: process.env.IOL_USERNAME!,
-        password: process.env.IOL_PASSWORD!,
-        grant_type: 'password',
-      }),
-    });
-    return (await res.json()).access_token || null;
-  } catch { return null; }
-}
-
-async function getIOLPrecio(token: string, ticker: string) {
-  try {
-    const res = await fetch(`${IOL_API}/bCBA/Titulos/${ticker}/cotizacion`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
 }
 
 // Solo para renta variable US (step 5) y warm-up. Timeout 7s.
@@ -70,23 +43,13 @@ function parsearVto(desc: string): string | null {
   return `${y}-${m[2]}-${m[1]}`;
 }
 
-function descripcionEsBono(desc: string): boolean {
-  const d = desc.toLowerCase();
-  return (
-    d.includes('bono') || d.includes('obligac') || d.includes(' on ') ||
-    d.startsWith('on ') || d.includes('letra') || d.includes('letes') ||
-    d.includes('lecap') || d.includes('lete') ||
-    /v\.\d{2}\/\d{2}\/\d{2,4}/.test(d) || /\d+(\.\d+)?%/.test(d)
-  );
-}
-
 export async function GET(request: NextRequest) {
   const ticker = request.nextUrl.searchParams.get('ticker')?.toUpperCase().trim();
   if (!ticker) return NextResponse.json({ error: 'Ticker requerido' }, { status: 400 });
 
   const esD = ticker.endsWith('D') && !ARS_TERMINAN_EN_D.has(ticker);
   const monedaLabel = esD ? 'USD' : 'ARS';
-  const token = await getToken();
+  const token = await getIOLToken();
 
   // ── 1. BALANZ ─────────────────────────────────────────────
   if (process.env.BALANZ_COOKIE) {
@@ -124,7 +87,7 @@ export async function GET(request: NextRequest) {
         const indicadores = parsearIndicadoresBalanz(analyticsRaw.indicadores || []);
 
         if (flujos.length > 0) {
-          const iolData = token ? await getIOLPrecio(token, ticker) : null;
+          const iolData = token ? await getIOLCotizacion(token, ticker) : null;
           const precioValor = iolData?.ultimoPrecio ?? null;
           let tirFinal = indicadores?.tir ?? null;
           const precioUSD = precioValor ? (esD ? precioValor : precioValor / mep) : null;
@@ -176,7 +139,7 @@ export async function GET(request: NextRequest) {
   if (spec) {
     const mep = await getMep();
     const iolData = token
-      ? (await getIOLPrecio(token, ticker) || await getIOLPrecio(token, tickerBase))
+      ? (await getIOLCotizacion(token, ticker) || await getIOLCotizacion(token, tickerBase))
       : null;
     const precioValor = iolData?.ultimoPrecio ?? null;
     if (precioValor) {
@@ -204,17 +167,22 @@ export async function GET(request: NextRequest) {
 
   // ── 3. IOL BÁSICO ────────────────────────────────────────
   if (token) {
-    const iolRaw = await getIOLPrecio(token, ticker);
+    const iolRaw = await getIOLCotizacion(token, ticker);
     if (iolRaw?.ultimoPrecio) {
-      const desc = iolRaw.descripcionTitulo || iolRaw.titulo?.descripcion || '';
-      const esCedearARS = desc.toLowerCase().includes('cedear');
+      // La cotización nueva ya no trae una descripción de texto del instrumento (la
+      // API vieja sí, y clasificábamos "es CEDEAR"/"es bono" buscando palabras ahí
+      // dentro). Ahora consultamos el catálogo de activos, que da un asset_type real.
+      const tickerBaseAsset = esD ? ticker.slice(0, -1) : ticker;
+      const asset = await getIOLAsset(token, tickerBaseAsset);
+      const nombre = asset?.nombre || ticker;
+      const esCedearARS = esCedear(asset?.assetType ?? null);
 
       // CEDEAR ARS — precio de IOL, fundamentals lazy desde /api/fundamentals
       if (esCedearARS && !esD) {
         const usTicker = getUSTicker(ticker);
         return NextResponse.json({
           ticker, tipo: 'cedear', fuente: 'IOL ARS',
-          monedaLabel: 'ARS', nombre: desc,
+          monedaLabel: 'ARS', nombre,
           usTicker, sufixFundamentals: '',
           precio: {
             valor: iolRaw.ultimoPrecio, moneda: 'ARS',
@@ -228,30 +196,30 @@ export async function GET(request: NextRequest) {
         });
       }
 
-     // Acción AR (ej: YPFD) — sin lazy fundamentals (GOOGLEFINANCE no los tiene para BYMA)
-if (!esCedearARS && !descripcionEsBono(desc)) {
-  return NextResponse.json({
-    ticker, tipo: 'renta_variable', fuente: 'IOL',
-    nombre: desc,
-    // Sin usTicker → el hook no llama a /api/fundamentals
-    precio: iolRaw.ultimoPrecio,
-    variacion: iolRaw.variacion ?? null,
-    apertura: iolRaw.apertura ?? null,
-    maximo: iolRaw.maximo ?? null,
-    minimo: iolRaw.minimo ?? null,
-    cierreAnterior: iolRaw.cierreAnterior ?? null,
-    fechaHora: iolRaw.fechaHora ?? null,
-    marketCap: null, per: null, eps: null, beta: null,
-    maximo52: null, minimo52: null,
-  });
-}
+      // Acción AR (ej: YPFD) — sin lazy fundamentals (GOOGLEFINANCE no los tiene para BYMA)
+      if (!esCedearARS && !esBono(asset?.assetType ?? null)) {
+        return NextResponse.json({
+          ticker, tipo: 'renta_variable', fuente: 'IOL',
+          nombre,
+          // Sin usTicker → el hook no llama a /api/fundamentals
+          precio: iolRaw.ultimoPrecio,
+          variacion: iolRaw.variacion ?? null,
+          apertura: iolRaw.apertura ?? null,
+          maximo: iolRaw.maximo ?? null,
+          minimo: iolRaw.minimo ?? null,
+          cierreAnterior: iolRaw.cierreAnterior ?? null,
+          fechaHora: iolRaw.fechaHora ?? null,
+          marketCap: null, per: null, eps: null, beta: null,
+          maximo52: null, minimo52: null,
+        });
+      }
 
       // Bono IOL básico
       if (!esCedearARS) {
         return NextResponse.json({
           ticker, tipo: 'renta_fija', fuente: 'IOL básico',
           enBaseDeDatos: false, monedaLabel,
-          spec: { nombre: desc, vencimiento: parsearVto(desc), moneda: monedaLabel, esAprox: true },
+          spec: { nombre, vencimiento: parsearVto(nombre), moneda: monedaLabel, esAprox: true },
           precio: { valor: iolRaw.ultimoPrecio, moneda: monedaLabel, variacion: iolRaw.variacion ?? null, fechaHora: iolRaw.fechaHora ?? null, fuente: 'IOL' },
           analytics: null, requiereSpecs: true,
         });
@@ -263,7 +231,7 @@ if (!esCedearARS && !descripcionEsBono(desc)) {
   if (esD) {
     const base = ticker.slice(0, -1);
     const usTicker = getUSTicker(base);
-    const iolD = token ? await getIOLPrecio(token, ticker) : null;
+    const iolD = token ? await getIOLCotizacion(token, ticker) : null;
     const precioCedear = iolD?.ultimoPrecio ?? null;
 
     if (precioCedear != null) {

@@ -67,9 +67,12 @@ export async function POST(request: NextRequest) {
       .select('*')
       .eq('user_id', user_id);
 
-    // 3. Capital inicial
-    const depositos = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
-    const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
+    // 3. Capital inicial — neto depositado ANTES de que arranque el período. Antes se
+    // calculaba sobre TODAS las operaciones de la cuenta sin importar el período, por
+    // eso salía el mismo número en "Diario", "Anual" e "Histórico".
+    const opsAntesDelPeriodo = ops.filter(o => o.fecha < fechaInicio);
+    const depositos = opsAntesDelPeriodo.filter(o => o.tipo === 'deposito').reduce((s, o) => s + (o.monto_usd || 0), 0);
+    const retiros = opsAntesDelPeriodo.filter(o => o.tipo === 'retiro').reduce((s, o) => s + (o.monto_usd || 0), 0);
     const capitalInicial = depositos - retiros;
 
     // 4. Ops del período
@@ -233,10 +236,17 @@ export async function POST(request: NextRequest) {
       })
       .filter(p => p.fechaUltimaVenta >= fechaInicio && p.fechaUltimaVenta <= fechaFin);
 
-    // 8. Cauciones
-    const interesesCauciones = (periodosCauciones || []).reduce((s, p) => s + (p.intereses || 0), 0);
-    const capitalCaucionado = (cauciones || []).reduce((s, c) => s + (c.monto || 0), 0);
-    const tnasValidas = (cauciones || []).filter((c: any) => c.tna).map((c: any) => c.tna);
+    // 8. Cauciones — igual que capitalInicial, esto sumaba TODAS las cauciones de la
+    // cuenta sin filtrar por fecha, así que "Cauciones del período" mostraba lo mismo
+    // en cualquier período. Acotamos a las que arrancaron (fecha_inicio) dentro del
+    // rango del reporte: los períodos ya cerrados vienen de caucion_periodos (con su
+    // interés final), y la caución vigente en curso viene de la tabla cauciones.
+    const periodosCauDelRango = (periodosCauciones || []).filter((p: any) => p.fecha_inicio >= fechaInicio && p.fecha_inicio <= fechaFin);
+    const caucionesDelRango = (cauciones || []).filter((c: any) => c.fecha_inicio >= fechaInicio && c.fecha_inicio <= fechaFin);
+    const interesesCauciones = periodosCauDelRango.reduce((s: number, p: any) => s + (p.intereses || 0), 0);
+    const capitalCaucionado = periodosCauDelRango.reduce((s: number, p: any) => s + (p.monto || 0), 0)
+      + caucionesDelRango.reduce((s: number, c: any) => s + (c.monto || 0), 0);
+    const tnasValidas = [...periodosCauDelRango, ...caucionesDelRango].filter((c: any) => c.tna).map((c: any) => c.tna);
     const tnaPromedio = tnasValidas.length
       ? tnasValidas.reduce((a: number, b: number) => a + b, 0) / tnasValidas.length
       : null;
