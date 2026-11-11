@@ -9,6 +9,7 @@ export async function getIOLToken(): Promise<string | null> {
   try {
     const res = await fetch(`${IOL_API}/auth/token`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         grant_type: 'password',
@@ -22,9 +23,12 @@ export async function getIOLToken(): Promise<string | null> {
   } catch { return null; }
 }
 
+// cache: 'no-store' es clave acá — Next.js cachea fetch() por URL de forma indefinida
+// salvo que se le diga lo contrario, y con cotizaciones en vivo eso significa servir
+// precios viejos (de hace horas o días) como si fueran actuales.
 async function iolGet(path: string, token: string): Promise<any | null> {
   try {
-    const res = await fetch(`${IOL_API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${IOL_API}${path}`, { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
     const json = await res.json();
     return json?.data ?? null;
@@ -45,11 +49,11 @@ export interface IOLCotizacion {
 // Misma forma "plana" que devolvía la API vieja (v2), para no reescribir toda la
 // lógica que ya consume estos campos en los distintos endpoints propios.
 //
-// T0 (contado inmediato) es el segmento que de verdad trae datos para la gran mayoría
-// de los activos — probamos T1 pensando que sería más representativo, pero rompió la
-// cotización de activos que con T0 andaban perfecto (ej. AMZN), así que volvemos a T0.
+// Usamos T1 (liquidación normal, donde se opera la gran mayoría del volumen real en
+// Argentina). El fallo que vimos antes probando T1 era en realidad por el fetch()
+// cacheado de Next.js devolviendo un token vencido, no por T1 en sí — ver iolGet.
 export async function getIOLCotizacion(token: string, ticker: string, market = 'BCBA'): Promise<IOLCotizacion | null> {
-  const data = await iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T0`, token);
+  const data = await iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T1`, token);
   if (!data) return null;
   return {
     ultimoPrecio: data.prices?.current ?? null,
