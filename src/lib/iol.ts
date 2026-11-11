@@ -75,12 +75,14 @@ export async function getIOLAsset(token: string, ticker: string, market = 'BCBA'
   return { nombre: data.name ?? null, assetType: data.asset_type ?? null };
 }
 
+// IOL devuelve asset_type en mayúsculas (ej. "CEDEARS"), por eso comparamos en minúsculas.
 export function esCedear(assetType: string | null): boolean {
-  return assetType === 'cedears';
+  return (assetType || '').toLowerCase() === 'cedears';
 }
 
 export function esBono(assetType: string | null): boolean {
-  return assetType === 'government_bonds' || assetType === 'ons' || assetType === 'letters';
+  const t = (assetType || '').toLowerCase();
+  return t === 'government_bonds' || t === 'ons' || t === 'letters';
 }
 
 export interface IOLBar {
