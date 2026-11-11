@@ -176,6 +176,8 @@ export async function GET(request: NextRequest) {
       const asset = await getIOLAsset(token, tickerBaseAsset);
       const nombre = asset?.nombre || ticker;
       const esCedearARS = esCedear(asset?.assetType ?? null);
+      // TEMP debug — sacar una vez confirmado el valor real de asset_type en IOL
+      const _debugAsset = asset;
 
       // CEDEAR ARS — precio de IOL, fundamentals lazy desde /api/fundamentals
       if (esCedearARS && !esD) {
@@ -193,6 +195,7 @@ export async function GET(request: NextRequest) {
           },
           marketCap: null, per: null, eps: null, beta: null,
           maximo52: null, minimo52: null,
+          _debugAsset,
         });
       }
 
@@ -211,6 +214,7 @@ export async function GET(request: NextRequest) {
           fechaHora: iolRaw.fechaHora ?? null,
           marketCap: null, per: null, eps: null, beta: null,
           maximo52: null, minimo52: null,
+          _debugAsset,
         });
       }
 
@@ -222,6 +226,7 @@ export async function GET(request: NextRequest) {
           spec: { nombre, vencimiento: parsearVto(nombre), moneda: monedaLabel, esAprox: true },
           precio: { valor: iolRaw.ultimoPrecio, moneda: monedaLabel, variacion: iolRaw.variacion ?? null, fechaHora: iolRaw.fechaHora ?? null, fuente: 'IOL' },
           analytics: null, requiereSpecs: true,
+          _debugAsset,
         });
       }
     }
