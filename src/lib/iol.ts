@@ -44,10 +44,23 @@ export interface IOLCotizacion {
 
 // Misma forma "plana" que devolvía la API vieja (v2), para no reescribir toda la
 // lógica que ya consume estos campos en los distintos endpoints propios.
-export async function getIOLCotizacion(
-  token: string, ticker: string, market = 'BCBA', term: 'T0' | 'T1' = 'T0'
-): Promise<IOLCotizacion | null> {
-  const data = await iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=${term}`, token);
+//
+// Pedimos los dos segmentos de liquidación (T0 "contado inmediato" y T1 "normal") y nos
+// quedamos con el que tenga la cotización más reciente: algunos activos casi no operan
+// en uno de los dos segmentos y quedan con un precio de varios días atrás si solo
+// consultamos ese.
+export async function getIOLCotizacion(token: string, ticker: string, market = 'BCBA'): Promise<IOLCotizacion | null> {
+  const [t0, t1] = await Promise.all([
+    iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T0`, token),
+    iolGet(`/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=T1`, token),
+  ]);
+  const data = [t0, t1]
+    .filter(Boolean)
+    .sort((a: any, b: any) => {
+      const da = a?.last_updated ? new Date(a.last_updated).getTime() : 0;
+      const db = b?.last_updated ? new Date(b.last_updated).getTime() : 0;
+      return db - da;
+    })[0];
   if (!data) return null;
   return {
     ultimoPrecio: data.prices?.current ?? null,
