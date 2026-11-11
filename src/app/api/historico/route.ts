@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     const url = `${process.env.APPS_SCRIPT_URL}?action=history&ticker=${encodeURIComponent(ticker)}&suffix=${encodeURIComponent(suffix)}&range=${range}&interval=${interval}`;
-    const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+    const res = await fetch(url, { redirect: 'follow', signal: controller.signal, cache: 'no-store' });
     clearTimeout(timer);
     const data = await res.json();
     if (data?.error) return NextResponse.json({ error: data.error }, { status: 404 });

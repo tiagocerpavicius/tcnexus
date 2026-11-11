@@ -15,7 +15,7 @@ export function balanzHeaders() {
 }
 
 export async function balanzGet(path: string) {
-  const res = await fetch(`${BASE}${path}`, { headers: balanzHeaders() });
+  const res = await fetch(`${BASE}${path}`, { cache: 'no-store', headers: balanzHeaders() });
   if (res.status === 401 || res.status === 403) throw new Error('AUTH_EXPIRED');
   if (!res.ok) throw new Error(`HTTP_${res.status}`);
   return res.json();
@@ -75,7 +75,7 @@ export function parsearIndicadoresBalanz(indicadores: any[]) {
 
 export async function getMep(): Promise<number> {
   try {
-    const res = await fetch('https://dolarapi.com/v1/dolares/bolsa');
+    const res = await fetch('https://dolarapi.com/v1/dolares/bolsa', { cache: 'no-store' });
     const data = await res.json();
     return data?.venta || 1430;
   } catch { return 1430; }

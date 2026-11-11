@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const url = `${APPS_SCRIPT_URL}?action=quotes&tickers=${tickers.join(',')}&suffix=${encodeURIComponent(suffix)}`;
-    const res = await fetch(url, { redirect: 'follow' });
+    const res = await fetch(url, { redirect: 'follow', cache: 'no-store' });
     const prices = await res.json();
     return NextResponse.json(prices);
   } catch {

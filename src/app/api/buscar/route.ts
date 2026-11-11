@@ -19,7 +19,7 @@ async function getYahooDetails(ticker: string, suffix: string) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 7000);
     const url = `${process.env.APPS_SCRIPT_URL}?action=details&ticker=${ticker}&suffix=${encodeURIComponent(suffix)}`;
-    const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+    const res = await fetch(url, { redirect: 'follow', signal: controller.signal, cache: 'no-store' });
     clearTimeout(timer);
     const data = await res.json();
     if (data?.precio != null && !data.error) return data;
@@ -28,7 +28,7 @@ async function getYahooDetails(ticker: string, suffix: string) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     const qUrl = `${process.env.APPS_SCRIPT_URL}?action=quotes&tickers=${ticker}&suffix=${encodeURIComponent(suffix)}`;
-    const qRes = await fetch(qUrl, { redirect: 'follow', signal: controller.signal });
+    const qRes = await fetch(qUrl, { redirect: 'follow', signal: controller.signal, cache: 'no-store' });
     clearTimeout(timer);
     const qData = await qRes.json();
     if (qData?.[ticker] != null) return { ticker, precio: qData[ticker] };

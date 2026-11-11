@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    const res = await fetch('https://dolarapi.com/v1/dolares');
+    const res = await fetch('https://dolarapi.com/v1/dolares', { cache: 'no-store' });
     const data = await res.json();
     if (Array.isArray(data)) return NextResponse.json(data);
     // Si dolarapi devuelve un solo objeto (ej. caído parcialmente), lo envolvemos igual

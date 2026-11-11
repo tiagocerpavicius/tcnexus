@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   const fetchTerm = async (term: string) => {
     const url = `https://api.iolinversiones.com/broker/market-data/${encodeURIComponent(ticker)}/quote?market=${market}&term=${term}`;
     try {
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(url, { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } });
       const body = await res.json().catch(() => null);
       return { status: res.status, ok: res.ok, body };
     } catch (err) {

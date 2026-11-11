@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     // MEP actual
     let mep = 1430;
     try {
-      const dolarRes = await fetch('https://dolarapi.com/v1/dolares/bolsa');
+      const dolarRes = await fetch('https://dolarapi.com/v1/dolares/bolsa', { cache: 'no-store' });
       const dolarData = await dolarRes.json();
       const bolsa = Array.isArray(dolarData) ? dolarData.find((d: any) => d.casa === 'bolsa') : dolarData;
       if (bolsa?.venta) mep = bolsa.venta;
