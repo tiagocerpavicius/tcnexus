@@ -114,7 +114,15 @@ function getMepForDate(fecha: string, fallbackMep: number, mepHistory: MepHistor
     return entries.find((entry) => entry.fecha === today)?.venta ?? fallbackMep;
   }
 
-  return entries.at(-1)?.venta ?? fallbackMep;
+  if (entries.length) return entries.at(-1)!.venta;
+
+  // El histórico de MEP arranca recién en 2018. Para una fecha más vieja que eso no hay
+  // ningún dato real <= esa fecha — usar el MEP de HOY (~40-100x más alto que en 2016-2018)
+  // para convertir una operación tan vieja la achica igual de veces, arruinando cualquier
+  // cuenta que dependa de ese monto. Usamos el dato real más antiguo que tengamos en vez
+  // del actual — no es exacto, pero está en el orden de magnitud correcto.
+  const masAntiguo = [...mepHistory].filter(e => e?.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
+  return masAntiguo?.venta ?? fallbackMep;
 }
 
 function calcularCAGR(operaciones: Operacion[], valorActualUSD: number): number | null {
