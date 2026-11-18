@@ -1835,7 +1835,12 @@ export default function PortfolioPage() {
     const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const compras = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
     const ventas = ops.filter(o => o.tipo === 'venta').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const totalInv = Math.max(0, (compras !== 0 || ventas !== 0) ? compras - ventas : depositos - retiros);
+    // "Capital inicial" = depósitos netos reales. Si no hay registros de depósito/retiro
+    // (portfolio cargado solo con compras/ventas, sin ese historial), usamos el costo neto
+    // de lo comprado como estimación — pero NUNCA al revés: antes, con cualquier compra
+    // ya se ignoraban los depósitos reales y la cifra subía cada vez que comprabas algo,
+    // aunque no hubieras metido plata nueva.
+    const totalInv = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos y amortizaciones recibidas por ticker
