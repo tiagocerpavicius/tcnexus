@@ -222,6 +222,28 @@ function calcularEfectivoUSD(ops: Operacion[], fallbackMep: number = 0, mepHisto
   return Math.max(0, e);
 }
 
+// Capital inicial real, sin depender de que se carguen depósitos/retiros: simula un
+// saldo de caja (compra resta, venta/dividendo/depósito suma, retiro resta) y toma el
+// punto más negativo al que llegó ese saldo en algún momento. Ese mínimo es el capital
+// externo que efectivamente hizo falta poner — reinvertir lo cobrado de una venta en una
+// compra nueva no hace bajar el saldo más de lo que ya había bajado antes, así que no
+// infla este número; solo lo infla plata realmente nueva.
+function calcularCapitalInicialUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): number {
+  const sorted = [...ops].sort((a, b) => a.fecha.localeCompare(b.fecha));
+  let cash = 0, minCash = 0;
+  for (const op of sorted) {
+    const montoUSD = getMontoUSDOperacion(op, fallbackMep, mepHistory);
+    if (op.tipo === 'deposito') cash += montoUSD;
+    else if (op.tipo === 'retiro') cash -= montoUSD;
+    else if (op.tipo === 'compra') cash -= montoUSD;
+    else if (op.tipo === 'venta') cash += montoUSD;
+    else if (op.tipo === 'dividendo') cash += montoUSD;
+    // 'traspaso': sin impacto en efectivo
+    if (cash < minCash) minCash = cash;
+  }
+  return Math.max(0, -minCash);
+}
+
 function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}, fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): GananciaRealizada[] {
   const bases = new Map<string, { costoTotal: number; cantidad: number; nombre: string; tipo_activo: string }>();
   const realizadasMap = new Map<string, GananciaRealizada>();
@@ -1831,16 +1853,7 @@ export default function PortfolioPage() {
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
     const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
-    const depositos = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const retiros = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const compras = ops.filter(o => o.tipo === 'compra').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const ventas = ops.filter(o => o.tipo === 'venta').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    // "Capital inicial" = depósitos netos reales. Si no hay registros de depósito/retiro
-    // (portfolio cargado solo con compras/ventas, sin ese historial), usamos el costo neto
-    // de lo comprado como estimación — pero NUNCA al revés: antes, con cualquier compra
-    // ya se ignoraban los depósitos reales y la cifra subía cada vez que comprabas algo,
-    // aunque no hubieras metido plata nueva.
-    const totalInv = Math.max(0, (depositos !== 0 || retiros !== 0) ? depositos - retiros : compras - ventas);
+    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos y amortizaciones recibidas por ticker
