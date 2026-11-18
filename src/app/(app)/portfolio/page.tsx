@@ -1861,7 +1861,16 @@ export default function PortfolioPage() {
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
     const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
-    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
+    // "Capital inicial" = depósitos netos reales cuando existen (es lo más simple y
+    // preciso). El modelo de "mínimo de caja" (calcularCapitalInicialUSD) queda solo
+    // como respaldo para cuentas que de verdad nunca cargaron ni un depósito/retiro —
+    // ese modelo mide "el capital externo que hizo falta en el peor momento", que no es
+    // lo mismo que "cuánta plata neta metiste a la cuenta" si parte quedó sin invertir.
+    const depositosUSD = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
+    const retirosUSD = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
+    const totalInv = (depositosUSD !== 0 || retirosUSD !== 0)
+      ? Math.max(0, depositosUSD - retirosUSD)
+      : calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos y amortizaciones recibidas por ticker
