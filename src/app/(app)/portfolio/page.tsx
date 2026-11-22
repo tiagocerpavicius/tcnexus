@@ -230,29 +230,29 @@ function calcularEfectivoUSD(ops: Operacion[], fallbackMep: number = 0, mepHisto
   return Math.max(0, e);
 }
 
-// Respaldo para cuando no hay ningún depósito/retiro cargado: simula un saldo de caja
-// (compra resta, venta/dividendo/depósito suma, retiro resta) y toma el punto más
-// negativo al que llegó ese saldo. Ese mínimo es el capital externo que hizo falta poner
-// — pero no distingue qué compra se pagó con plata nueva y cuál con el producido de una
-// venta vieja sin gastar, así que subestima el total si hay mucha reinversión. Usar
-// depósitos reales (reconciliados contra el extracto del broker) siempre que existan.
+// Capital inicial = plata que entró de afuera del sistema. Se recorre todo en orden
+// cronológico manteniendo un saldo de caja: depósitos y ventas/dividendos suman caja,
+// retiros y compras restan. Si una compra no se puede pagar con la caja disponible
+// (ej.: comprás sin haber cargado el depósito, o vendés 500 y comprás por 700), la
+// diferencia se suma como capital nuevo — así no depende de que el usuario cargue a
+// mano un depósito por cada peso que entra; solo hay que cargarlo si se quiere que
+// quede registrado como ingreso real en vez de inferido.
 function calcularCapitalInicialUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): number {
-  const eventos = ops.map(op => {
-    const montoUSD = getMontoUSDOperacion(op, fallbackMep, mepHistory);
-    if (op.tipo === 'deposito') return { fecha: op.fecha, montoUSD };
-    if (op.tipo === 'retiro') return { fecha: op.fecha, montoUSD: -montoUSD };
-    if (op.tipo === 'compra') return { fecha: op.fecha, montoUSD: -montoUSD };
-    if (op.tipo === 'venta') return { fecha: op.fecha, montoUSD };
-    if (op.tipo === 'dividendo') return { fecha: op.fecha, montoUSD };
-    return { fecha: op.fecha, montoUSD: 0 }; // 'traspaso': sin impacto en efectivo
-  });
-  const sorted = eventos.sort((a, b) => a.fecha.localeCompare(b.fecha));
-  let cash = 0, minCash = 0;
-  for (const e of sorted) {
-    cash += e.montoUSD;
-    if (cash < minCash) minCash = cash;
+  const eventos = ops
+    .filter(op => op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'compra' || op.tipo === 'venta' || op.tipo === 'dividendo')
+    .map(op => ({ tipo: op.tipo, fecha: op.fecha, montoUSD: getMontoUSDOperacion(op, fallbackMep, mepHistory) }))
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+  let cash = 0, capitalInicial = 0;
+  for (const e of eventos) {
+    if (e.tipo === 'deposito') { cash += e.montoUSD; capitalInicial += e.montoUSD; }
+    else if (e.tipo === 'retiro') { cash -= e.montoUSD; capitalInicial -= e.montoUSD; }
+    else if (e.tipo === 'venta' || e.tipo === 'dividendo') { cash += e.montoUSD; }
+    else if (e.tipo === 'compra') {
+      if (e.montoUSD > cash) { capitalInicial += e.montoUSD - cash; cash = e.montoUSD; }
+      cash -= e.montoUSD;
+    }
   }
-  return Math.max(0, -minCash);
+  return Math.max(0, capitalInicial);
 }
 
 function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}, fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): GananciaRealizada[] {
@@ -1864,17 +1864,7 @@ export default function PortfolioPage() {
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
     const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
-    // "Capital inicial" = depósitos netos reales. El modelo de "reserva de caja"
-    // (calcularCapitalInicialUSD) quedó solo como respaldo para cuando no hay ningún
-    // depósito/retiro cargado — una vez que los depósitos están bien cargados (reconciliados
-    // contra el extracto real del broker), son la fuente más simple y precisa: no tienen el
-    // problema de fungibilidad del modelo de reserva (que no puede saber qué compra se pagó
-    // con plata nueva y cuál con el producido de una venta).
-    const depositosUSD = ops.filter(o => o.tipo === 'deposito').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const retirosUSD = ops.filter(o => o.tipo === 'retiro').reduce((s, o) => s + getMontoUSDOperacion(o, mepRate, mepHistoryData), 0);
-    const totalInv = (depositosUSD !== 0 || retirosUSD !== 0)
-      ? Math.max(0, depositosUSD - retirosUSD)
-      : calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
+    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos y amortizaciones recibidas por ticker
