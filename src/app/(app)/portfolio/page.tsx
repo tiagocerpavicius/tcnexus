@@ -237,22 +237,144 @@ function calcularEfectivoUSD(ops: Operacion[], fallbackMep: number = 0, mepHisto
 // diferencia se suma como capital nuevo — así no depende de que el usuario cargue a
 // mano un depósito por cada peso que entra; solo hay que cargarlo si se quiere que
 // quede registrado como ingreso real en vez de inferido.
-function calcularCapitalInicialUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): number {
+//
+// Reglas (las que pidió el usuario):
+//  - Compra sin plata disponible → la diferencia es capital nuevo.
+//  - Vendo y recompro por el mismo monto → no hay capital nuevo.
+//  - Vendo por más de lo que recompro → el sobrante queda en caja para la próxima compra.
+//  - Recompro por más de lo que vendí → sólo la diferencia es capital nuevo.
+//
+// Detalles que evitan contar dos veces la misma plata:
+//  - La caja se lleva en su moneda (ARS y USD por separado). Un depósito en pesos se usa
+//    para comprar en pesos sin pasar por el MEP de dos días distintos (eso inventaba
+//    "capital nuevo" sólo porque el dólar se movió entre el depósito y la compra). Si
+//    falta en una moneda se usa la otra, convertida al MEP de ese día.
+//  - Mismo día: primero entran depósitos/ventas/dividendos, después compras, al final retiros.
+//  - Si una compra generó capital inferido y en los días siguientes aparece el depósito
+//    o la venta que la pagó (el extracto lo fecha después, se liquidó T+1, o se cargó con
+//    otra fecha), esa plata cubre lo ya inferido en vez de sumarse otra vez.
+const VENTANA_FONDEO_TARDIO_DIAS = 7;
+const ORDEN_DIA: Record<string, number> = { deposito: 0, venta: 1, dividendo: 1, compra: 2, retiro: 3 };
+
+function diasEntre(desde: string, hasta: string): number {
+  return Math.round((new Date(hasta + 'T00:00:00Z').getTime() - new Date(desde + 'T00:00:00Z').getTime()) / 86400000);
+}
+
+interface PasoCapital { fecha: string; tipo: string; ticker: string; montoUSD: number; capitalNuevoUSD: number; capitalUSD: number; cajaARS: number; cajaUSD: number }
+
+// Compras/ventas de activos de cauciones (tabla cedears_arb). Esas compras se pagan con la
+// plata de la caución, así que nunca son capital propio. Pero cuando se vende uno de esos
+// activos y con esa plata se compra algo de la cartera, esa compra tampoco es capital nuevo.
+interface MovimientoCaucion { fecha: string; tipo: 'compra' | 'venta'; ticker: string; montoUSD: number }
+
+function simularCapitalInicial(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = [], movCaucion: MovimientoCaucion[] = []): { capitalUSD: number; pasos: PasoCapital[] } {
   const eventos = ops
-    .filter(op => op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'compra' || op.tipo === 'venta' || op.tipo === 'dividendo')
-    .map(op => ({ tipo: op.tipo, fecha: op.fecha, montoUSD: getMontoUSDOperacion(op, fallbackMep, mepHistory) }))
-    .sort((a, b) => a.fecha.localeCompare(b.fecha));
-  let cash = 0, capitalInicial = 0;
+    .filter(op => op.tipo in ORDEN_DIA)
+    .map(op => {
+      const montoUSD = Math.abs(getMontoUSDOperacion(op, fallbackMep, mepHistory));
+      const mepDia = getMepForDate(op.fecha, fallbackMep, mepHistory) || fallbackMep || 1;
+      const moneda: 'USD' | 'ARS' = op.moneda === 'USD' ? 'USD' : 'ARS';
+      return { op: { fecha: op.fecha, tipo: op.tipo as string, ticker: op.ticker }, caucion: false, montoUSD, mepDia, moneda, nativo: moneda === 'USD' ? montoUSD : montoUSD * mepDia };
+    })
+    .concat(movCaucion.map(m => ({ op: { fecha: m.fecha, tipo: m.tipo as string, ticker: m.ticker }, caucion: true, montoUSD: Math.abs(m.montoUSD), mepDia: 1, moneda: 'USD' as const, nativo: Math.abs(m.montoUSD) })))
+    .filter(e => e.montoUSD > 0 && !!e.op.fecha)
+    .sort((a, b) => a.op.fecha.localeCompare(b.op.fecha) || ORDEN_DIA[a.op.tipo] - ORDEN_DIA[b.op.tipo]);
+
+  const caja = { ARS: 0, USD: 0 };
+  let cajaCaucionUSD = 0; // producido de ventas de activos de caución, todavía sin usar
+  let capital = 0;
+  let inferidoSinDeposito: { fecha: string; usd: number }[] = [];
+  const pasos: PasoCapital[] = [];
+
   for (const e of eventos) {
-    if (e.tipo === 'deposito') { cash += e.montoUSD; capitalInicial += e.montoUSD; }
-    else if (e.tipo === 'retiro') { cash -= e.montoUSD; capitalInicial -= e.montoUSD; }
-    else if (e.tipo === 'venta' || e.tipo === 'dividendo') { cash += e.montoUSD; }
-    else if (e.tipo === 'compra') {
-      if (e.montoUSD > cash) { capitalInicial += e.montoUSD - cash; cash = e.montoUSD; }
-      cash -= e.montoUSD;
+    const { op, mepDia, moneda } = e;
+    const otra: 'USD' | 'ARS' = moneda === 'USD' ? 'ARS' : 'USD';
+    const aNativo = (usd: number, m: 'USD' | 'ARS') => (m === 'USD' ? usd : usd * mepDia);
+    const aUSD = (monto: number, m: 'USD' | 'ARS') => (m === 'USD' ? monto : monto / mepDia);
+    let capitalNuevo = 0;
+
+    inferidoSinDeposito = inferidoSinDeposito.filter(p => p.usd > 0.005 && diasEntre(p.fecha, op.fecha) <= VENTANA_FONDEO_TARDIO_DIAS);
+    // Devuelve la parte (en USD) de este ingreso que no se usó para cubrir capital ya inferido.
+    const cubrirInferido = (usd: number): number => {
+      for (const p of inferidoSinDeposito) {
+        const cubre = Math.min(p.usd, usd);
+        p.usd -= cubre; usd -= cubre;
+        if (usd <= 0) break;
+      }
+      return usd;
+    };
+
+    if (e.caucion) {
+      if (op.tipo === 'venta') {
+        // Si ya se había comprado algo de la cartera con esta venta (cargada después), lo cubre.
+        const restanteUSD = cubrirInferido(e.montoUSD);
+        capitalNuevo = -(e.montoUSD - restanteUSD);
+        cajaCaucionUSD += restanteUSD;
+      } else {
+        cajaCaucionUSD = Math.max(0, cajaCaucionUSD - e.montoUSD); // el resto lo puso la caución
+      }
+    } else if (op.tipo === 'deposito') {
+      // Lo que cubre capital ya inferido es la misma plata: no suma capital ni caja otra vez.
+      const restanteUSD = cubrirInferido(e.montoUSD);
+      capitalNuevo = restanteUSD;
+      caja[moneda] += aNativo(restanteUSD, moneda);
+    } else if (op.tipo === 'venta' || op.tipo === 'dividendo') {
+      // Una venta que pagó una compra anterior "devuelve" ese capital inferido: la compra no
+      // fue con plata nueva, fue con esta venta.
+      const restanteUSD = cubrirInferido(e.montoUSD);
+      capitalNuevo = -(e.montoUSD - restanteUSD);
+      caja[moneda] += aNativo(restanteUSD, moneda);
+    } else if (op.tipo === 'compra') {
+      let falta = e.nativo;
+      const usaMisma = Math.min(Math.max(caja[moneda], 0), falta);
+      caja[moneda] -= usaMisma; falta -= usaMisma;
+      if (falta > 0.005) {
+        const faltaEnOtra = aNativo(aUSD(falta, moneda), otra);
+        const usaOtra = Math.min(Math.max(caja[otra], 0), faltaEnOtra);
+        caja[otra] -= usaOtra;
+        falta -= aNativo(aUSD(usaOtra, otra), moneda);
+      }
+      if (falta > 0.005 && cajaCaucionUSD > 0) {
+        const usaCaucion = Math.min(cajaCaucionUSD, aUSD(falta, moneda));
+        cajaCaucionUSD -= usaCaucion;
+        falta -= aNativo(usaCaucion, moneda);
+      }
+      if (falta > 0.005) {
+        capitalNuevo = aUSD(falta, moneda);
+        inferidoSinDeposito.push({ fecha: op.fecha, usd: capitalNuevo });
+      }
+    } else if (op.tipo === 'retiro') {
+      capitalNuevo = -e.montoUSD;
+      caja[moneda] -= e.nativo;
+      if (caja[moneda] < 0) {
+        // Se retiró más de lo que había en esa moneda: el resto sale de la otra caja.
+        const deficitUSD = aUSD(-caja[moneda], moneda);
+        caja[moneda] = 0;
+        caja[otra] = Math.max(0, caja[otra] - aNativo(deficitUSD, otra));
+      }
     }
+
+    capital += capitalNuevo;
+    pasos.push({ fecha: op.fecha, tipo: op.tipo, ticker: op.ticker, montoUSD: e.montoUSD, capitalNuevoUSD: capitalNuevo, capitalUSD: capital, cajaARS: caja.ARS, cajaUSD: caja.USD });
   }
-  return Math.max(0, capitalInicial);
+  return { capitalUSD: Math.max(0, capital), pasos };
+}
+
+function calcularCapitalInicialUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = [], movCaucion: MovimientoCaucion[] = []): number {
+  return simularCapitalInicial(ops, fallbackMep, mepHistory, movCaucion).capitalUSD;
+}
+
+// cedears_arb → movimientos de caución (compra en fecha_compra, venta en fecha_venta).
+function movimientosCaucionDesdeArb(rows: any[], fallbackMep: number, mepHistory: MepHistoryEntry[]): MovimientoCaucion[] {
+  const out: MovimientoCaucion[] = [];
+  for (const a of rows || []) {
+    const cant = Number(a.cantidad) || 0; if (cant <= 0) continue;
+    const aUSD = (monto: number, fecha: string) => ((a.moneda || 'USD') === 'USD' ? monto : monto / (getMepForDate(fecha, fallbackMep, mepHistory) || fallbackMep || 1));
+    const ticker = String(a.ticker || '').toUpperCase();
+    if (a.fecha_compra && a.precio_compra) out.push({ fecha: a.fecha_compra, tipo: 'compra', ticker, montoUSD: aUSD(cant * a.precio_compra, a.fecha_compra) });
+    if (a.fecha_venta && a.precio_venta) out.push({ fecha: a.fecha_venta, tipo: 'venta', ticker, montoUSD: aUSD(cant * a.precio_venta, a.fecha_venta) });
+  }
+  return out;
 }
 
 function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<string, string> = {}, fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): GananciaRealizada[] {
@@ -432,6 +554,34 @@ function parseIOL(html: string, mep: number, mepHistory: MepHistoryEntry[] = [])
   return result;
 }
 
+// ── IOL "Movimientos" (.xlsx, formato nuevo) ──────────────────────────────────
+// Este extracto no trae el ticker de compras/ventas/dividendos, así que sólo se toman los
+// movimientos de fondos: depósitos, extracciones y créditos. Se ignoran los "Cancelada"
+// (IOL los lista igual, y cargarlos inflaba el capital) y los créditos de centavos
+// (intereses de la cuenta, no son plata que entró de afuera).
+function parseIOLMovimientosXLSX(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEntry[] = []): Omit<OpImportada, 'isDuplicate'|'selected'>[] {
+  const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+  const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[wb.SheetNames[0]], { defval: null });
+  if (!rows.length || !('Tipo de Movimiento' in rows[0])) throw new Error('El archivo no parece un extracto de movimientos de IOL.');
+  const num = (v: any) => typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(',', '.')) || 0;
+  const result: Omit<OpImportada, 'isDuplicate'|'selected'>[] = [];
+  for (const r of rows) {
+    if (String(r['Estado'] || '').trim() !== 'Terminada') continue;
+    const mov = String(r['Tipo de Movimiento'] || '').trim();
+    const esDeposito = mov === 'Depósito' || mov === 'Deposito' || mov === 'Crédito' || mov === 'Credito';
+    const esRetiro = mov === 'Extracción' || mov === 'Extraccion';
+    if (!esDeposito && !esRetiro) continue;
+    const monto = Math.abs(num(r['Monto'])); if (!monto) continue;
+    const moneda: 'USD'|'ARS' = String(r['Tipo de Cuenta'] || r['Moneda'] || '').includes('US') ? 'USD' : 'ARS';
+    const fecha = parseXLSXDate(r['Fecha de Concertación'] || r['Fecha de Liquidación']); if (!fecha) continue;
+    const monto_usd = moneda === 'USD' ? monto : monto / getMepForDate(fecha, mep, mepHistory);
+    if (mov.startsWith('Cr') && monto_usd < 1) continue; // intereses
+    const tipo = esDeposito ? 'deposito' : 'retiro';
+    result.push({ importId: `IOL-MOV-${r['Nro. de Movimiento'] || `${fecha}-${monto}`}`, fecha, ticker: 'EFECTIVO', nombre: tipo === 'deposito' ? 'Depósito' : 'Retiro', tipo, cantidad: null, precio_unitario: null, monto_usd, moneda, tipo_activo: 'efectivo', broker: 'IOL', notas: null });
+  }
+  return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
 // ── Balanz Parser ─────────────────────────────────────────────────────────────
 
 function parseXLSXDate(val: any): string {
@@ -527,12 +677,21 @@ function parseBalanz(buffer: ArrayBuffer, mep: number, mepHistory: MepHistoryEnt
     }
 
     // 3. Recibo de cobro (depósito bancario a Balanz)
-    if (/^Recibo de Cobro\s*\/\s*\d+/i.test(desc) && Math.abs(importe) > 0) {
-      result.push({ importId: `BAL-RECIBO-${fecha}-${String(Math.abs(importe))}`, fecha, ticker: 'EFECTIVO', nombre: 'Depósito', tipo: 'deposito', cantidad: null, precio_unitario: null, monto_usd, moneda, tipo_activo: 'efectivo', broker: 'Balanz', notas: null });
+    // (el número de recibo va en el id: el mismo día puede haber varios recibos por el mismo monto)
+    const recibo = desc.match(/^Recibo de Cobro\s*\/\s*(\d+)/i);
+    if (recibo && Math.abs(importe) > 0) {
+      result.push({ importId: `BAL-RECIBO-${recibo[1]}`, fecha, ticker: 'EFECTIVO', nombre: 'Depósito', tipo: 'deposito', cantidad: null, precio_unitario: null, monto_usd, moneda, tipo_activo: 'efectivo', broker: 'Balanz', notas: null });
       continue;
     }
 
-    // Ignorados: Comprobante de Pago, Movimiento Manual, FCI, etc.
+    // 4. Comprobante de pago (retiro de fondos de Balanz hacia el banco u otro broker)
+    const pago = desc.match(/^Comprobante de Pago\s*\/\s*(\d+)/i);
+    if (pago && importe < 0) {
+      result.push({ importId: `BAL-PAGO-${pago[1]}`, fecha, ticker: 'EFECTIVO', nombre: 'Retiro', tipo: 'retiro', cantidad: null, precio_unitario: null, monto_usd, moneda, tipo_activo: 'efectivo', broker: 'Balanz', notas: null });
+      continue;
+    }
+
+    // Ignorados: Movimiento Manual, FCI, etc.
   }
 
   return result.sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -620,11 +779,14 @@ function parseMaxCapitalXLSX(data: ArrayBuffer, mep: number, mepHistory: MepHist
 
 // ── Duplicate detection ───────────────────────────────────────────────────────
 
-function isDuplicateOp(op: Omit<OpImportada, 'isDuplicate'|'selected'>, existing: Operacion[]): boolean {
-  if (op.tipo === 'traspaso') {
-    return existing.some(e => e.tipo === 'traspaso' && e.fecha === op.fecha && normalizarTicker(e.ticker) === normalizarTicker(op.ticker) && e.notas === op.notas);
-  }
-  return existing.some(e => e.fecha === op.fecha && e.ticker === op.ticker && e.tipo === op.tipo && e.monto_usd > 0 && Math.abs(e.monto_usd - op.monto_usd) / e.monto_usd < 0.03);
+// Cada operación existente sólo puede "tapar" a una importada: si el extracto trae tres
+// depósitos iguales el mismo día y en la base hay uno, los otros dos son nuevos.
+function isDuplicateOp(op: Omit<OpImportada, 'isDuplicate'|'selected'>, existing: Operacion[], usadas: Set<string> = new Set()): boolean {
+  const match = op.tipo === 'traspaso'
+    ? existing.find(e => !usadas.has(e.id) && e.tipo === 'traspaso' && e.fecha === op.fecha && normalizarTicker(e.ticker) === normalizarTicker(op.ticker) && e.notas === op.notas)
+    : existing.find(e => !usadas.has(e.id) && e.fecha === op.fecha && e.ticker === op.ticker && e.tipo === op.tipo && e.monto_usd > 0 && Math.abs(e.monto_usd - op.monto_usd) / e.monto_usd < 0.03);
+  if (match) usadas.add(match.id);
+  return !!match;
 }
 
 // ── UI Components ─────────────────────────────────────────────────────────────
@@ -1539,16 +1701,23 @@ function ModalImportarBroker({ operacionesExistentes, mep, mepHistory, onClose, 
   const fileRef = useRef<HTMLInputElement>(null);
   const handleFile = useCallback(async (file: File) => {
     setLoading(true); setError(''); setOps([]);
+    // Sin el histórico del MEP, cada peso se pasaría a dólares con el MEP de HOY (así se
+    // cargaron mal los depósitos viejos). Mejor no importar nada hasta tenerlo.
+    if (!mepHistory.length) { setError('Todavía no se cargó el histórico del dólar MEP. Esperá unos segundos y volvé a elegir el archivo.'); setLoading(false); return; }
     try {
       let parsed: Omit<OpImportada,'isDuplicate'|'selected'>[] = [];
-      if (broker==='IOL') { const text = await file.text(); parsed = parseIOL(text, mep, mepHistory); }
+      if (broker==='IOL') {
+        const buffer = await file.arrayBuffer();
+        const esXLSX = new Uint8Array(buffer.slice(0, 2)).every((b, i) => b === [0x50, 0x4b][i]); // "PK" = zip/xlsx
+        parsed = esXLSX ? parseIOLMovimientosXLSX(buffer, mep, mepHistory) : parseIOL(new TextDecoder().decode(buffer), mep, mepHistory);
+      }
       else if (broker==='Max Capital') { const buffer = await file.arrayBuffer(); parsed = parseMaxCapitalXLSX(buffer, mep, mepHistory) as any; }
       else { const buffer = await file.arrayBuffer(); parsed = parseBalanz(buffer, mep, mepHistory); }
       if (!parsed.length) { setError('No se encontraron operaciones.'); setLoading(false); return; }
-      setOps(parsed.map(op => ({ ...op, isDuplicate: isDuplicateOp(op, operacionesExistentes), selected: !isDuplicateOp(op, operacionesExistentes) })));
+      const usadas = new Set<string>(); setOps(parsed.map(op => { const dup = isDuplicateOp(op, operacionesExistentes, usadas); return { ...op, isDuplicate: dup, selected: !dup }; }));
     } catch (e: any) { setError(e?.message||'Error al leer el archivo.'); }
     setLoading(false);
-  }, [broker, mep, operacionesExistentes]);
+  }, [broker, mep, mepHistory, operacionesExistentes]);
   const toggleAll = (val: boolean) => setOps(prev => prev.map(o => ({ ...o, selected: o.isDuplicate?false:val })));
   const toggleOne = (id: string) => setOps(prev => prev.map(o => o.importId===id&&!o.isDuplicate?{...o,selected:!o.selected}:o));
   const selectedOps = ops.filter(o=>o.selected); const dupCount = ops.filter(o=>o.isDuplicate).length; const newCount = ops.filter(o=>!o.isDuplicate).length;
@@ -1864,7 +2033,12 @@ export default function PortfolioPage() {
 
   const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
     const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
-    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData);
+    let movCaucion: MovimientoCaucion[] = [];
+    try {
+      const { data: arbRows } = await supabase.from('cedears_arb').select('ticker,cantidad,precio_compra,fecha_compra,precio_venta,fecha_venta,moneda');
+      movCaucion = movimientosCaucionDesdeArb(arbRows || [], mepRate, mepHistoryData);
+    } catch {}
+    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData, movCaucion);
     const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
     setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
     // Rentas/dividendos y amortizaciones recibidas por ticker
