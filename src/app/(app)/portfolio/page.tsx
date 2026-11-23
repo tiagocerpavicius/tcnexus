@@ -216,20 +216,6 @@ function calcularPosicionesBase(ops: Operacion[], fallbackMep: number = 0, mepHi
   return map;
 }
 
-function calcularEfectivoUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): number {
-  let e = 0;
-  for (const op of ops) {
-    const montoUSD = getMontoUSDOperacion(op, fallbackMep, mepHistory);
-    if (op.tipo === 'deposito') e += montoUSD;
-    else if (op.tipo === 'retiro') e -= montoUSD;
-    else if (op.tipo === 'compra') e -= montoUSD;
-    else if (op.tipo === 'venta') e += montoUSD;
-    else if (op.tipo === 'dividendo') e += montoUSD;
-    // 'traspaso': sin impacto en efectivo
-  }
-  return Math.max(0, e);
-}
-
 // Capital inicial = plata que entró de afuera del sistema. Se recorre todo en orden
 // cronológico manteniendo un saldo de caja: depósitos y ventas/dividendos suman caja,
 // retiros y compras restan. Si una compra no se puede pagar con la caja disponible
@@ -267,7 +253,7 @@ interface PasoCapital { fecha: string; tipo: string; ticker: string; montoUSD: n
 // activos y con esa plata se compra algo de la cartera, esa compra tampoco es capital nuevo.
 interface MovimientoCaucion { fecha: string; tipo: 'compra' | 'venta'; ticker: string; montoUSD: number }
 
-function simularCapitalInicial(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = [], movCaucion: MovimientoCaucion[] = []): { capitalUSD: number; pasos: PasoCapital[] } {
+function simularCapitalInicial(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = [], movCaucion: MovimientoCaucion[] = []): { capitalUSD: number; liquidezARS: number; liquidezUSD: number; pasos: PasoCapital[] } {
   const eventos = ops
     .filter(op => op.tipo in ORDEN_DIA)
     .map(op => {
@@ -357,11 +343,16 @@ function simularCapitalInicial(ops: Operacion[], fallbackMep: number = 0, mepHis
     capital += capitalNuevo;
     pasos.push({ fecha: op.fecha, tipo: op.tipo, ticker: op.ticker, montoUSD: e.montoUSD, capitalNuevoUSD: capitalNuevo, capitalUSD: capital, cajaARS: caja.ARS, cajaUSD: caja.USD });
   }
-  return { capitalUSD: Math.max(0, capital), pasos };
-}
-
-function calcularCapitalInicialUSD(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = [], movCaucion: MovimientoCaucion[] = []): number {
-  return simularCapitalInicial(ops, fallbackMep, mepHistory, movCaucion).capitalUSD;
+  // Liquidez = lo que queda en cada caja al final: ventas/dividendos/depósitos que todavía
+  // no se usaron en una compra. Queda ahí el tiempo que haga falta (un día o tres meses)
+  // y es lo primero que se usa en la próxima compra. El producido de ventas de caución es
+  // plata en dólares disponible en la cuenta, así que se suma a la liquidez en USD.
+  return {
+    capitalUSD: Math.max(0, capital),
+    liquidezARS: Math.max(0, caja.ARS),
+    liquidezUSD: Math.max(0, caja.USD) + Math.max(0, cajaCaucionUSD),
+    pasos,
+  };
 }
 
 // cedears_arb → movimientos de caución (compra en fecha_compra, venta en fecha_venta).
@@ -829,8 +820,8 @@ function DistChart({ title, data, total }: { title: string; data: { name: string
 
 // ── Tab: Posiciones ───────────────────────────────────────────────────────────
 
-function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], caucionesTomadasUSD = 0, caucionesTomadasARS = 0, caucionesInteresUSD = 0, caucionesInteresARS = 0 }: {
-  posiciones: PosicionCompleta[]; efectivoUSD: number; mep: number;
+function TabPosiciones({ posiciones, efectivoUSD, liquidezARS = 0, liquidezUSD = 0, mep, caucionActivos = [], caucionesTomadasUSD = 0, caucionesTomadasARS = 0, caucionesInteresUSD = 0, caucionesInteresARS = 0 }: {
+  posiciones: PosicionCompleta[]; efectivoUSD: number; liquidezARS?: number; liquidezUSD?: number; mep: number;
   caucionActivos?: CaucionActivoSimple[]; caucionesTomadasUSD?: number; caucionesTomadasARS?: number;
   caucionesInteresUSD?: number; caucionesInteresARS?: number;
 }) {
@@ -934,19 +925,23 @@ function TabPosiciones({ posiciones, efectivoUSD, mep, caucionActivos = [], cauc
                 </tr>
               );
             })}
-            {efectivoUSD > 0 && (
-              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
+            {([['Liquidez USD', liquidezUSD, 'USD'], ['Liquidez ARS', liquidezARS, 'ARS']] as const).filter(([, monto]) => monto > 0.005).map(([label, monto, mon]) => {
+              const enUSD = mon === 'USD' ? monto : monto / (mep || 1);
+              return (
+              <tr key={label} style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,182,212,0.03)' }}>
                 <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
-                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: '#06b6d4' }}>Liquidez</div>
+                  <div style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '13px', color: '#06b6d4' }}>{label}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)' }}>Disponible para la próxima compra</div>
                 </td>
                 <td colSpan={3} />
-                <td style={{ padding: '10px 12px', textAlign: 'right', color: '#06b6d4', fontWeight: 500, whiteSpace: 'nowrap' }}>{verUSD ? fmtUSD(efectivoUSD) : fmtARS(efectivoUSD*mep)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: '#06b6d4', fontWeight: 500, whiteSpace: 'nowrap' }}>{mon === 'ARS' ? fmtARS(monto) : (verUSD ? fmtUSD(monto) : fmtARS(monto*mep))}{mon === 'ARS' && verUSD ? <div style={{ fontSize: '10px', color: 'var(--muted)' }}>≈ {fmtUSD(enUSD)}</div> : null}</td>
                 <td colSpan={4} style={{ textAlign: 'right', color: 'var(--muted)', padding: '10px 12px' }}>—</td>
                 <td colSpan={2} />
                 <td style={{ padding: '10px 12px', textAlign: 'right' }}><span style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', borderRadius: '4px', padding: '2px 6px', fontSize: '10px' }}>Liquidez</span></td>
                 <td />
               </tr>
-            )}
+              );
+            })}
             {caucionesTomadasUSD > 0 && (
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(245,158,11,0.04)' }}>
                 <td style={{ padding: '10px 12px', position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>
@@ -1972,6 +1967,8 @@ export default function PortfolioPage() {
   const [showModal, setShowModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [efectivoUSD, setEfectivoUSD] = useState(0);
+  const [liquidezARS, setLiquidezARS] = useState(0);
+  const [liquidezUSD, setLiquidezUSD] = useState(0);
   const [totalInvertidoUSD, setTotalInvertidoUSD] = useState(0);
   const [xirr, setXirr] = useState<number|null>(null);
   const [netoCaucionesUSD, setNetoCaucionesUSD] = useState<number|null>(null);
@@ -2038,9 +2035,11 @@ export default function PortfolioPage() {
       const { data: arbRows } = await supabase.from('cedears_arb').select('ticker,cantidad,precio_compra,fecha_compra,precio_venta,fecha_venta,moneda');
       movCaucion = movimientosCaucionDesdeArb(arbRows || [], mepRate, mepHistoryData);
     } catch {}
-    const totalInv = calcularCapitalInicialUSD(ops, mepRate, mepHistoryData, movCaucion);
-    const efectivo = calcularEfectivoUSD(ops, mepRate, mepHistoryData);
-    setTotalInvertidoUSD(totalInv); setEfectivoUSD(efectivo);
+    const sim = simularCapitalInicial(ops, mepRate, mepHistoryData, movCaucion);
+    // Los pesos líquidos se valúan al MEP de hoy para sumarlos al total en dólares.
+    const efectivo = sim.liquidezUSD + (mepRate > 0 ? sim.liquidezARS / mepRate : 0);
+    setTotalInvertidoUSD(sim.capitalUSD); setEfectivoUSD(efectivo);
+    setLiquidezARS(sim.liquidezARS); setLiquidezUSD(sim.liquidezUSD);
     // Rentas/dividendos y amortizaciones recibidas por ticker
     const rentasByTicker = new Map<string, number>();
     for (const op of ops.filter(o => o.tipo === 'dividendo')) {
@@ -2077,7 +2076,7 @@ export default function PortfolioPage() {
     const activas = completed.filter(p=>!p.esVencido);
     setPosiciones(activas);
     const totalActivos = activas.reduce((s,p)=>s+(p.valorActualUSD||0), 0);
-    const efectivoCagr = Math.max(0, calcularEfectivoUSD(ops, mepRate, mepHistoryData));
+    const efectivoCagr = efectivo;
     setXirr(calcularCAGR(ops, totalActivos + efectivoCagr));
     setRealizadas(calcularGananciasRealizadas(ops, vMap, mepRate, mepHistoryData));
   }, []);
@@ -2178,10 +2177,11 @@ export default function PortfolioPage() {
             <MetricaCard label="GANANCIA NETA" value={(gananciaNeta>=0?'+':'')+fmtUSD(gananciaNeta)} sub={`${fmtPct(gananciaNetaPct)} retorno`} subColor={colorV(gananciaNeta)} valueColor={colorV(gananciaNeta)} />
           </div>
 
-          <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4, 1fr)',gap:'10px',marginBottom:'10px' }}>
+          <div style={{ display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5, 1fr)',gap:'10px',marginBottom:'10px' }}>
             <MetricaCard label="TIR ANUALIZADA" small value={xirr!=null?(xirr>=0?'+':'')+xirr.toFixed(1)+'%':'—'} sub="CAGR" valueColor={xirr!=null?colorV(xirr):'var(--text)'} />
             <MetricaCard label="EN ACTIVOS" small value={fmtUSD(totalActivosUSD)} sub={`${posiciones.length} pos.`} />
-            <MetricaCard label="LIQUIDEZ" small value={fmtUSD(efectivoUSD)} sub="Efectivo" valueColor="#06b6d4" />
+            <MetricaCard label="LIQUIDEZ USD" small value={fmtUSD(liquidezUSD)} sub="Disponible para próxima compra" valueColor="#06b6d4" />
+            <MetricaCard label="LIQUIDEZ ARS" small value={fmtARS(liquidezARS)} sub={`≈ ${fmtUSD(mep>0?liquidezARS/mep:0)} · próxima compra`} valueColor="#06b6d4" />
             <MetricaCard label="CONCENTRACIÓN" small value={`${concentracion.toFixed(0)}%`} sub={`top 3: ${sortedByVal.slice(0,3).map(p=>p.ticker).join(', ')}`} valueColor={concentracion>70?'var(--red)':concentracion>50?'var(--amber)':'var(--green)'} />
           </div>
 
@@ -2217,7 +2217,7 @@ export default function PortfolioPage() {
           </div>
 
           {tab==='resumen'      && <TabResumen posiciones={posicionesMerged} efectivoUSD={efectivoUSD} mep={mep} totalInvertidoUSD={totalInvertidoUSD} realizadas={realizadas} />}
-          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} caucionesInteresUSD={caucionesInteresUSD} caucionesInteresARS={caucionesInteresARS} />}
+          {tab==='posiciones'   && <TabPosiciones posiciones={posiciones} efectivoUSD={efectivoUSD} liquidezARS={liquidezARS} liquidezUSD={liquidezUSD} mep={mep} caucionActivos={caucionActivos} caucionesTomadasUSD={caucionesTomadasUSD} caucionesTomadasARS={caucionesTomadasARS} caucionesInteresUSD={caucionesInteresUSD} caucionesInteresARS={caucionesInteresARS} />}
           {tab==='mapa'         && <TabMapa posiciones={posicionesMerged} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posicionesMerged} efectivoUSD={efectivoUSD} />}
           {tab==='performance'  && <TabPerformance posiciones={posicionesMerged} realizadas={realizadas} />}
