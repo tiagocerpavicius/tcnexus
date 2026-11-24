@@ -157,6 +157,12 @@ function pnlColor(pct: number | null): string {
 
 // ── Cálculos de portfolio ─────────────────────────────────────────────────────
 
+// AL30/AL30D se usan sólo para comprar/vender dólar MEP: es un cambio de moneda, no una
+// inversión. Cuentan para la caja (pesos → dólares) pero no son posición ni rendimiento.
+function esDolarMep(op: Pick<Operacion, 'ticker' | 'notas'>): boolean {
+  return op.notas === 'dolar mep' || normalizarTicker(op.ticker || '') === 'AL30';
+}
+
 function calcularPosicionesBase(ops: Operacion[], fallbackMep: number = 0, mepHistory: MepHistoryEntry[] = []): Map<string, PosicionBase> {
   const map = new Map<string, PosicionBase>();
   const transferCostPerUnit = new Map<string, number>();
@@ -168,6 +174,12 @@ function calcularPosicionesBase(ops: Operacion[], fallbackMep: number = 0, mepHi
     if (a.tipo === 'traspaso' && b.tipo === 'traspaso') {
       if (a.notas === 'out' && b.notas === 'in') return -1;
       if (a.notas === 'in' && b.notas === 'out') return 1;
+    }
+    // Mismo día y mismo activo: la compra va antes que la venta. Si no, una venta del
+    // día no encuentra tenencia, se ignora y la compra queda como posición fantasma.
+    if (a.tipo !== b.tipo && normalizarTicker(a.ticker) === normalizarTicker(b.ticker)) {
+      if (a.tipo === 'compra' && b.tipo === 'venta') return -1;
+      if (a.tipo === 'venta' && b.tipo === 'compra') return 1;
     }
     return 0;
   });
@@ -380,6 +392,12 @@ function calcularGananciasRealizadas(ops: Operacion[], vencimientosMap: Record<s
     if (a.tipo === 'traspaso' && b.tipo === 'traspaso') {
       if (a.notas === 'out' && b.notas === 'in') return -1;
       if (a.notas === 'in' && b.notas === 'out') return 1;
+    }
+    // Mismo día y mismo activo: la compra va antes que la venta. Si no, una venta del
+    // día no encuentra tenencia, se ignora y la compra queda como posición fantasma.
+    if (a.tipo !== b.tipo && normalizarTicker(a.ticker) === normalizarTicker(b.ticker)) {
+      if (a.tipo === 'compra' && b.tipo === 'venta') return -1;
+      if (a.tipo === 'venta' && b.tipo === 'compra') return 1;
     }
     return 0;
   });
@@ -1956,6 +1974,7 @@ type TabKey = 'resumen'|'posiciones'|'mapa'|'distribucion'|'performance'|'por-ac
 export default function PortfolioPage() {
   const isMobile = useIsMobile();
   const [operaciones, setOperaciones] = useState<Operacion[]>([]);
+  const operacionesInversion = useMemo(() => operaciones.filter(o => !esDolarMep(o)), [operaciones]);
   const [posiciones, setPosiciones] = useState<PosicionCompleta[]>([]);
   const [realizadas, setRealizadas] = useState<GananciaRealizada[]>([]);
   const [vencimientosMap, setVencimientosMap] = useState<Record<string,string>>({});
@@ -2028,14 +2047,15 @@ export default function PortfolioPage() {
     } catch {}
   }, []);
 
-  const buildPositions = useCallback(async (ops: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
+  const buildPositions = useCallback(async (opsTodas: Operacion[], mepRate: number, mepHistoryData: MepHistoryEntry[] = []) => {
+    const ops = opsTodas.filter(o => !esDolarMep(o)); // posiciones, rentas y rendimiento
     const posMap = calcularPosicionesBase(ops, mepRate, mepHistoryData);
     let movCaucion: MovimientoCaucion[] = [];
     try {
       const { data: arbRows } = await supabase.from('cedears_arb').select('ticker,cantidad,precio_compra,fecha_compra,precio_venta,fecha_venta,moneda');
       movCaucion = movimientosCaucionDesdeArb(arbRows || [], mepRate, mepHistoryData);
     } catch {}
-    const sim = simularCapitalInicial(ops, mepRate, mepHistoryData, movCaucion);
+    const sim = simularCapitalInicial(opsTodas, mepRate, mepHistoryData, movCaucion);
     // Los pesos líquidos se valúan al MEP de hoy para sumarlos al total en dólares.
     const efectivo = sim.liquidezUSD + (mepRate > 0 ? sim.liquidezARS / mepRate : 0);
     setTotalInvertidoUSD(sim.capitalUSD); setEfectivoUSD(efectivo);
@@ -2221,8 +2241,8 @@ export default function PortfolioPage() {
           {tab==='mapa'         && <TabMapa posiciones={posicionesMerged} />}
           {tab==='distribucion' && <TabDistribucion posiciones={posicionesMerged} efectivoUSD={efectivoUSD} />}
           {tab==='performance'  && <TabPerformance posiciones={posicionesMerged} realizadas={realizadas} />}
-          {tab==='por-activo'   && <TabPorActivo posiciones={posicionesMerged} operaciones={operaciones} realizadas={realizadas} mep={mep} mepHistory={mepHistory} />}
-          {tab==='historial'    && <TabHistorial operaciones={operaciones} mep={mep} mepHistory={mepHistory} valorActualIol={valorTotalUSD} />}
+          {tab==='por-activo'   && <TabPorActivo posiciones={posicionesMerged} operaciones={operacionesInversion} realizadas={realizadas} mep={mep} mepHistory={mepHistory} />}
+          {tab==='historial'    && <TabHistorial operaciones={operacionesInversion} mep={mep} mepHistory={mepHistory} valorActualIol={valorTotalUSD} />}
           {tab==='operaciones'  && <TabOperaciones operaciones={operaciones} onDelete={async(id)=>{await supabase.from('operaciones').delete().eq('id',id);await loadData(true);}} onImport={()=>setShowImport(true)} />}
         </>
       )}

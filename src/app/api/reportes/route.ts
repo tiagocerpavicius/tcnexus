@@ -117,6 +117,8 @@ export async function POST(request: NextRequest) {
       const t = op.ticker?.toUpperCase();
       if (!t || op.tipo === 'deposito' || op.tipo === 'retiro' || op.tipo === 'dividendo') continue;
       const key = normalizarTicker(t);
+      // AL30/AL30D = compra/venta de dólar MEP: cambio de moneda, no posición ni rendimiento.
+      if (key === 'AL30' || op.notas === 'dolar mep') continue;
 
       // Registrar primera compra
       if (op.tipo === 'compra' && !primeraCompraPorTicker[key]) {
